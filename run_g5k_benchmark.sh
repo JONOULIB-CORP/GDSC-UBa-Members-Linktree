@@ -64,7 +64,7 @@ log_info() { echo -e "\n\e[1;34m[INFO] $1\e[0m"; }
 log_error() { echo -e "\n\e[1;31m[ERREUR] $1\e[0m"; }
 
 # Exécute une commande sur le frontend G5K
-ssh_frontend() { ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "${G5K_USER}@${G5K_FRONTEND}" "$@"; }
+ssh_frontend() { ssh -t -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "${G5K_USER}@${G5K_FRONTEND}" "$@"; }
 # Exécute une commande sur un noeud G5K
 ssh_node() { ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "root@$1" "$@"; }
 # Exécute une commande sur la VM
