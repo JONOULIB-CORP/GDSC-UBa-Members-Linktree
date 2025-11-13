@@ -1,0 +1,41 @@
+#cloud-config
+# ==============================================================================
+# Fichier de Configuration Cloud-Init pour la VM de test ODB
+#
+# Description:
+# Ce fichier est utilisé par cloud-init au premier démarrage de la VM pour
+# la configurer automatiquement.
+# ==============================================================================
+
+# Définit le nom d'hôte de la machine
+hostname: odb-vm
+manage_etc_hosts: true
+
+# Création d'un utilisateur
+users:
+  - name: odb
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    groups: sudo
+    shell: /bin/bash
+    lock_passwd: false
+    # Le mot de passe est 'odb'. Le hash est généré via `openssl passwd -6 odb`
+    passwd: "$6$S4z880BYvnqawWis$vQa9zuJe.w9nVmw0LWoR6qstpcTL8vD1YueLvkLtxJV3FOeQySEAzDrFvuVSrgFpdV4dVTfjja4kvcblPDgIP1"
+
+# Permet la connexion SSH avec mot de passe (nécessaire pour le script)
+ssh_pwauth: true
+
+# Commandes à exécuter lors du premier démarrage
+runcmd:
+  - sudo apt-get update
+  - sudo apt-get install -y default-jdk git
+  - git clone https://github.com/vignol/mesures.git /home/odb/mesures
+  - sudo chown -R odb:odb /home/odb/mesures
+  - /home/odb/mesures/apache-tomcat-11.0.1/bin/startup.sh
+
+# Indique que le module 'runcmd' doit s'exécuter à chaque démarrage
+# Utile si on redémarre la VM, mais dans notre cas, elle est détruite.
+# bootcmd:
+#   - cloud-init-per instance runcmd
+
+# Final message
+final_message: "Le système est configuré et prêt."
