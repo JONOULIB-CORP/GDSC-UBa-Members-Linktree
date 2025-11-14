@@ -22,8 +22,8 @@ deploy_vm_on_m2() {
     log "Lancement de la VM..."
     ssh_g5k m2 "
         sudo-g5k virt-install --name ${VM_NAME} --memory ${VM_MEMORY_MB} --vcpus ${VM_CORES} \
-        --disk path=${REMOTE_PROJECT_PATH}/${LOCAL_IMAGE_NAME},size=${VM_DISK_SIZE%.*} \
-        --os-variant ubuntu24.04 --network bridge=br0 --graphics none --import --noautoconsole \
+        --disk path=${REMOTE_PROJECT_PATH}/${LOCAL_IMAGE_NAME},size=${VM_DISK_SIZE//G/} \
+        --network bridge=br0 --graphics none --import --noautoconsole \
         --cloud-init user-data=/tmp/user-data;
     " || die "Échec de la création de la VM."
 
