@@ -1,6 +1,13 @@
-*history*
-*vscode*
-*idea*
-/bin*
-*lib*
-.DS_Store
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Fichiers de sortie du benchmark
+*.csv
+*.md
+plots/
+latency_analysis/
+*.log
+*.hdr
