@@ -75,124 +75,141 @@ def write_reproducibility_report(payloads_to_report):
     with open(OUTPUT_FILES["reproducibility_report"], "w", encoding="utf-8") as f:
         f.write(f"Date du test: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
         f.write("## 1. Topologie de l'expérimentation\n\n")
-        # ... (le reste du code est omis pour la concision mais il est bien présent)
+        f.write("### 1.1. Client (C)\n")
+        for key, value in TOPOLOGY["client_host"].items(): f.write(f"- **{key.replace('_', ' ').capitalize()}**: {value}\n")
+        f.write("\n### 1.2. Intermédiaire (I)\n")
+        for key, value in TOPOLOGY["intermediate_vm"].items(): f.write(f"- **{key.replace('_', ' ').capitalize()}**: {value}\n")
+        f.write("\n### 1.3. Serveur final (S)\n")
+        for key, value in TOPOLOGY["backend_server"].items(): f.write(f"- **{key.replace('_', ' ').capitalize()}**: {value}\n")
+        f.write("\n## 2. Configuration réseau & capacités\n\n")
+        f.write("### 2.1. Carte réseau du nœud physique\n")
+        for key, value in NETWORK_CAPACITIES["host_nic"].items(): f.write(f"- **{key.replace('_', ' ').capitalize()}**: {value}\n")
+        f.write("\n### 2.2. Interface réseau de la VM\n")
+        for key, value in NETWORK_CAPACITIES["vm_nic"].items(): f.write(f"- **{key.replace('_', ' ').capitalize()}**: {value}\n")
+        f.write("\n## 3. Logiciels & versions\n\n")
+        for key, value in SOFTWARE_VERSIONS.items(): f.write(f"- **{key.replace('_', ' ').capitalize()}**: {value}\n")
+        f.write("\n## 4. Applications testées\n\n")
+        for name, details in APPLICATIONS.items(): f.write(f"### 4.1. {name}\n- **Endpoint**: `{details['endpoint']}`\n\n")
+        f.write("### 4.2. Payloads Testés\n")
+        for name, size in payloads_to_report.items(): f.write(f"- **{name}**: {size} KB\n")
+        f.write("\n\n## 5. Stratégies de `wrk2`\n\n")
+        for name, strategy in BENCHMARK_STRATEGIES.items():
+            if name in APPLICATIONS:
+                f.write(f"### 5.1. Stratégie pour `{name}`\n")
+                for key, value in strategy.items():
+                    if isinstance(value, dict):
+                        f.write(f"- **{key.replace('_', ' ').capitalize()}**:\n")
+                        for sub_key, sub_value in value.items(): f.write(f"  - {sub_key.replace('_', ' ').capitalize()}: {sub_value}\n")
+                    else: f.write(f"- **{key.replace('_', ' ').capitalize()}**: {value}\n")
+    print(f"Rapport de reproductibilité généré : {OUTPUT_FILES['reproducibility_report']}")
 
 def initialize_csv():
     header = ["timestamp", "servlet_name", "image_name", "image_size_kb", "threads", "connections", "duration_s", "target_rate_rps", "timeout_s", "observed_rps", "transfer_MBs", "total_requests", "errors_connect", "errors_read", "errors_write", "errors_timeout", "total_errors", "latency_avg_ms", "latency_p50_ms", "latency_p75_ms", "latency_p90_ms", "latency_p99_ms", "vm_cpu_avg_percent"]
     try:
-        with open(OUTPUT_FILES["raw_results_csv"], "w", newline="", encoding="utf-8") as f:
-            csv.writer(f).writerow(header)
+        with open(OUTPUT_FILES["raw_results_csv"], "w", newline="", encoding="utf-8") as f: csv.writer(f).writerow(header)
         print(f"Fichier de résultats initialisé : {OUTPUT_FILES['raw_results_csv']}")
-    except IOError as e:
-        print(f"Erreur CSV : {e}")
-        exit(1)
+    except IOError as e: print(f"Erreur CSV : {e}"); exit(1)
 
-def _parse_time(time_str):
-    if 'us' in time_str: return float(time_str.replace('us', '')) / 1000.0
-    if 'ms' in time_str: return float(time_str.replace('ms', ''))
-    if 's' in time_str: return float(time_str.replace('s', '')) * 1000.0
+def _parse_time(t):
+    if 'us' in t: return float(t.replace('us',''))/1000.0
+    if 'ms' in t: return float(t.replace('ms',''))
+    if 's' in t: return float(t.replace('s',''))*1000.0
     return 0.0
 
-def _parse_bytes(bytes_str):
-    bytes_str = bytes_str.lower()
-    if 'kb' in bytes_str: return float(bytes_str.replace('kb', '')) / 1024.0
-    if 'mb' in bytes_str: return float(bytes_str.replace('mb', ''))
-    if 'gb' in bytes_str: return float(bytes_str.replace('gb', '')) * 1024.0
-    if 'b' in bytes_str: return float(bytes_str.replace('b', '')) / (1024.0 * 1024.0)
+def _parse_bytes(b):
+    b = b.lower()
+    if 'kb' in b: return float(b.replace('kb',''))/1024.0
+    if 'mb' in b: return float(b.replace('mb',''))
+    if 'gb' in b: return float(b.replace('gb',''))*1024.0
+    if 'b' in b: return float(b.replace('b',''))/(1024.0*1024.0)
     return 0.0
 
 def _parse_wrk2_output(output):
-    results = {}
-    results['observed_rps'] = float(m.group(1)) if (m := re.search(r'Requests/sec:\s*([\d\.]+)', output)) else 0
-    results['transfer_MBs'] = _parse_bytes(m.group(1)) if (m := re.search(r'Transfer/sec:\s*([\d\.]+[kKmMgG]B)', output)) else 0
-    results['total_requests'] = int(m.group(1)) if (m := re.search(r'([\d]+) requests in', output)) else 0
+    res = {}
+    res['observed_rps'] = float(m.group(1)) if (m := re.search(r'Requests/sec:\s*([\d\.]+)', output)) else 0
+    res['transfer_MBs'] = _parse_bytes(m.group(1)) if (m := re.search(r'Transfer/sec:\s*([\d\.]+[kKmMgG]B)', output)) else 0
+    res['total_requests'] = int(m.group(1)) if (m := re.search(r'([\d]+) requests in', output)) else 0
     if m := re.search(r'Socket errors: connect (\d+), read (\d+), write (\d+), timeout (\d+)', output):
-        results.update(errors_connect=int(m.group(1)), errors_read=int(m.group(2)), errors_write=int(m.group(3)), errors_timeout=int(m.group(4)))
-        results['total_errors'] = sum(results[k] for k in ['errors_connect', 'errors_read', 'errors_write', 'errors_timeout'])
-    else: results.update(errors_connect=0, errors_read=0, errors_write=0, errors_timeout=0, total_errors=0)
+        res.update(errors_connect=int(m.group(1)), errors_read=int(m.group(2)), errors_write=int(m.group(3)), errors_timeout=int(m.group(4)), total_errors=sum(map(int, m.groups())))
+    else: res.update(errors_connect=0, errors_read=0, errors_write=0, errors_timeout=0, total_errors=0)
     if m := re.search(r'Latency Distribution\s+50%\s+([\d\.\w]+)\s+75%\s+([\d\.\w]+)\s+90%\s+([\d\.\w]+)\s+99%\s+([\d\.\w]+)', output):
-        results.update(latency_p50_ms=_parse_time(m.group(1)), latency_p75_ms=_parse_time(m.group(2)), latency_p90_ms=_parse_time(m.group(3)), latency_p99_ms=_parse_time(m.group(4)))
-    results['latency_avg_ms'] = _parse_time(m.group(1)) if (m := re.search(r'Latency\s+([\d\.\w]+)\s+', output)) else 0
-    return results
+        res.update(latency_p50_ms=_parse_time(m.group(1)), latency_p75_ms=_parse_time(m.group(2)), latency_p90_ms=_parse_time(m.group(3)), latency_p99_ms=_parse_time(m.group(4)))
+    res['latency_avg_ms'] = _parse_time(m.group(1)) if (m := re.search(r'Latency\s+([\d\.\w]+)\s+', output)) else 0
+    return res
 
 def _parse_mpstat_output(output):
-    lines = output.strip().split('\n')
-    idle_percentages = [float(parts[-1]) for line in lines if len(parts := line.split()) >= 12 and parts[2].lower() == 'all' and 'Average:' not in line]
-    if not idle_percentages: return 0.0
-    return 100.0 - np.mean(idle_percentages)
+    idle = [float(p[-1]) for l in output.strip().split('\n') if len(p := l.split()) >= 12 and p[2].lower()=='all' and 'Average:' not in l]
+    return 100.0 - np.mean(idle) if idle else 0.0
 
-def run_single_wrk2_test(url, rate, connections, threads, duration, timeout, hdr_histogram_output=None):
-    vm = TOPOLOGY['intermediate_vm']
-    remote_log, local_log = "/tmp/cpu_benchmark.log", "cpu_benchmark.log"
-    monitor_process = None
-    ssh_options = ["-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"]
+def run_single_wrk2_test(url, rate, connections, threads, duration_seconds, timeout_seconds, hdr_histogram_output=None):
+    vm = TOPOLOGY['intermediate_vm']; remote_log, local_log = "/tmp/cpu.log", "cpu.log"; mon_proc=None
+    ssh_opts = ["-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"]
     try:
         if hdr_histogram_output is None:
-            mpstat_cmd = f"mpstat -P ALL 1 {duration} > {remote_log}"
-            ssh_command = ["sshpass", "-p", vm['password'], "ssh"] + ssh_options + [f"{vm['user']}@{vm['ip']}", mpstat_cmd]
-            monitor_process = subprocess.Popen(ssh_command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        command = [SOFTWARE_VERSIONS['wrk2_path'], f"-t{threads}", f"-c{connections}", f"-d{duration}s", f"-R{rate}", f"--timeout={timeout}s", "--latency", url]
-        if hdr_histogram_output: command.extend(["--hdr-histogram", hdr_histogram_output])
-        print(f"  > Lancement wrk2: {' '.join(command)}")
-        process = subprocess.run(command, capture_output=True, text=True, check=False, timeout=duration + 20)
-        results = _parse_wrk2_output(process.stdout + process.stderr)
-        if monitor_process:
-            monitor_process.wait(timeout=15)
-            scp_cmd = ["sshpass", "-p", vm['password'], "scp"] + ssh_options + [f"{vm['user']}@{vm['ip']}:{remote_log}", local_log]
+            ssh_cmd = ["sshpass","-p",vm['password'],"ssh"]+ssh_opts+[f"{vm['user']}@{vm['ip']}",f"mpstat -P ALL 1 {duration_seconds} > {remote_log}"]
+            mon_proc = subprocess.Popen(ssh_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        wrk2_cmd = [SOFTWARE_VERSIONS['wrk2_path'],f"-t{threads}",f"-c{connections}",f"-d{duration_seconds}s",f"-R{rate}",f"--timeout={timeout_seconds}s","--latency",url]
+        if hdr_histogram_output: wrk2_cmd.extend(["--hdr-histogram", hdr_histogram_output])
+        print(f"  > Lancement wrk2: {' '.join(wrk2_cmd)}")
+        proc = subprocess.run(wrk2_cmd, capture_output=True, text=True, check=False, timeout=duration_seconds+20)
+        results = _parse_wrk2_output(proc.stdout + proc.stderr)
+
+        if mon_proc:
+            mon_proc.wait(15)
+            scp_cmd = ["sshpass","-p",vm['password'],"scp"]+ssh_opts+[f"{vm['user']}@{vm['ip']}:{remote_log}",local_log]
             subprocess.run(scp_cmd, check=True, capture_output=True, timeout=15)
-            with open(local_log, "r") as f: results['vm_cpu_avg_percent'] = _parse_mpstat_output(f.read())
+            with open(local_log,"r") as f: results['vm_cpu_avg_percent'] = _parse_mpstat_output(f.read())
             print(f"  > CPU moyen VM: {results['vm_cpu_avg_percent']:.2f}%")
         else: results['vm_cpu_avg_percent'] = 0.0
         return results
     except Exception as e:
-        print(f"  ! Erreur critique durant le test: {e}")
-        if monitor_process: monitor_process.kill()
+        print(f"  ! Erreur critique: {e}");
+        if mon_proc: mon_proc.kill()
         return None
     finally:
-        subprocess.run(["sshpass", "-p", vm['password'], "ssh"] + ssh_options + [f"{vm['user']}@{vm['ip']}", f"rm -f {remote_log}"], check=False)
+        subprocess.run(["sshpass","-p",vm['password'],"ssh"]+ssh_opts+[f"{vm['user']}@{vm['ip']}",f"rm -f {remote_log}"], check=False)
         if os.path.exists(local_log): os.remove(local_log)
 
 def _append_result_to_csv(result_data):
-    header = ["timestamp", "servlet_name", "image_name", "image_size_kb", "threads", "connections", "duration_s", "target_rate_rps", "timeout_s", "observed_rps", "transfer_MBs", "total_requests", "errors_connect", "errors_read", "errors_write", "errors_timeout", "total_errors", "latency_avg_ms", "latency_p50_ms", "latency_p75_ms", "latency_p90_ms", "latency_p99_ms", "vm_cpu_avg_percent"]
-    is_new_file = not os.path.exists(OUTPUT_FILES["raw_results_csv"])
+    header = ["timestamp","servlet_name","image_name","image_size_kb","threads","connections","duration_s","target_rate_rps","timeout_s","observed_rps","transfer_MBs","total_requests","errors_connect","errors_read","errors_write","errors_timeout","total_errors","latency_avg_ms","latency_p50_ms","latency_p75_ms","latency_p90_ms","latency_p99_ms","vm_cpu_avg_percent"]
+    new = not os.path.exists(OUTPUT_FILES["raw_results_csv"])
     with open(OUTPUT_FILES["raw_results_csv"], "a", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=header)
-        if is_new_file: writer.writeheader()
-        writer.writerow({k: v for k, v in result_data.items() if k in header})
+        w = csv.DictWriter(f, fieldnames=header)
+        if new: w.writeheader()
+        w.writerow({k:v for k,v in result_data.items() if k in header})
 
-def run_scenarios(payloads_to_test, applications_to_test=None):
-    if applications_to_test is None: applications_to_test = APPLICATIONS
-    print(f"\nLancement de l'exploration pour {len(applications_to_test)} servlet(s) sur {len(payloads_to_test)} image(s)...")
-    for s_name, s_details in applications_to_test.items():
-        for i_name, i_size_kb in payloads_to_test.items():
+def run_scenarios(payloads, apps=None):
+    if apps is None: apps = APPLICATIONS
+    print(f"\nLancement de l'exploration pour {len(apps)} servlet(s) sur {len(payloads)} image(s)...")
+    for s_name, s_details in apps.items():
+        for i_name, i_size in payloads.items():
             print(f"\n----- Scénario: Servlet='{s_name}', Image='{i_name}' -----")
-            strategy = BENCHMARK_STRATEGIES[s_name]
+            strat = BENCHMARK_STRATEGIES[s_name]
             url = f"http://{TOPOLOGY['intermediate_vm']['ip']}:8080{s_details['endpoint']}?machine={TOPOLOGY['backend_server']['hostname']}&image={i_name}"
-            for rate in range(strategy['rate_exploration']['start_rps'], strategy['rate_exploration']['max_rps'] + 1, strategy['rate_exploration']['step_rps']):
+            for rate in range(strat['rate_exploration']['start_rps'], strat['rate_exploration']['max_rps']+1, strat['rate_exploration']['step_rps']):
                 print(f"\nTesting Rate: {rate} RPS...")
-                results = run_single_wrk2_test(url, rate, **strategy)
-                if not results: break
-                _append_result_to_csv({"timestamp": datetime.datetime.now().isoformat(), "servlet_name": s_name, "image_name": i_name, "image_size_kb": i_size_kb, "target_rate_rps": rate, **results})
-                if results.get('total_requests', 0) > 0 and (results.get('errors_timeout', 0) / results['total_requests'] * 100) > strategy['stop_condition']['timeout_threshold_percent']:
+                res = run_single_wrk2_test(url, rate, **{k:v for k,v in strat.items() if k in ['connections','threads','duration_seconds','timeout_seconds']})
+                if not res: break
+                _append_result_to_csv({"timestamp":datetime.datetime.now().isoformat(),"servlet_name":s_name,"image_name":i_name,"image_size_kb":i_size,"target_rate_rps":rate,**strat,**res})
+                if res.get('total_requests',0)>0 and (res.get('errors_timeout',0)/res['total_requests']*100)>strat['stop_condition']['timeout_threshold_percent']:
                     print("  ! Condition d'arrêt atteinte."); break
 
 def main():
-    parser = argparse.ArgumentParser(description="Script de benchmark avancé pour ODB.")
-    parser.add_argument('--mode', type=str, default='all', choices=['all', 'motivation', 'random_table', 'latency'], help="Mode d'exécution.")
-    args = parser.parse_args()
-    print(f"Début de la campagne de benchmark (mode: {args.mode})")
+    parser=argparse.ArgumentParser(description="Script de benchmark ODB.")
+    parser.add_argument('--mode',type=str,default='all',choices=['all','motivation','random_table','latency'])
+    args=parser.parse_args()
+    print(f"Mode d'exécution: {args.mode}")
 
-    if args.mode == 'all':
+    if args.mode=='all':
         write_reproducibility_report(PAYLOADS); initialize_csv(); run_scenarios(PAYLOADS)
-    elif args.mode == 'random_table':
+    elif args.mode=='motivation':
+        write_reproducibility_report(PAYLOADS); initialize_csv(); run_scenarios(PAYLOADS, {"Serv":APPLICATIONS["Serv"]})
+    elif args.mode=='random_table':
         if not FULL_PAYLOAD_POOL: print("[ERREUR] FULL_PAYLOAD_POOL est vide."); return
-        selected_names = random.sample(list(FULL_PAYLOAD_POOL.keys()), 10)
-        selected_payloads = {name: FULL_PAYLOAD_POOL[name] for name in selected_names}
-        write_reproducibility_report(selected_payloads); initialize_csv(); run_scenarios(selected_payloads)
-        try:
-            if not (df := pd.read_csv(OUTPUT_FILES["raw_results_csv"])).empty: generate_comparison_table(df)
-        except FileNotFoundError: print("Fichier de résultats non trouvé.")
-        return
+        names = random.sample(list(FULL_PAYLOAD_POOL.keys()),10)
+        payloads = {n:FULL_PAYLOAD_POOL[n] for n in names}
+        write_reproducibility_report(payloads); initialize_csv(); run_scenarios(payloads)
 
     try:
         df = pd.read_csv(OUTPUT_FILES["raw_results_csv"])
@@ -200,69 +217,69 @@ def main():
     except FileNotFoundError:
         print(f"Fichier de résultats non trouvé. Exécutez d'abord une campagne."); return
 
-    if args.mode in ['all', 'motivation']: generate_motivation_plots(df)
-    if args.mode == 'all': generate_comparison_table(df)
-    if args.mode in ['all', 'latency']: analyze_latency_distribution(df)
+    if args.mode in ['all','motivation']: generate_motivation_plots(df)
+    if args.mode in ['all','random_table']: generate_comparison_table(df)
+    if args.mode in ['all','latency']: analyze_latency_distribution(df)
     print("\nCampagne de benchmark terminée.")
 
 def get_peak_performance(df):
     return df.loc[df.groupby(['servlet_name', 'image_name'])['observed_rps'].idxmax()]
 
 def generate_motivation_plots(df):
-    print("\nGénération des graphiques de motivation pour 'Serv'...")
+    print("\nGénération des graphiques de motivation...")
     plots_dir="plots"; os.makedirs(plots_dir, exist_ok=True)
     serv_df = df[df['servlet_name'] == 'Serv']
     if serv_df.empty: return
-    peak_perf_df = get_peak_performance(serv_df).sort_values('image_size_kb')
-    x = peak_perf_df['image_size_kb']
-    fig, axes = plt.subplots(3, 1, figsize=(12, 18), sharex=True)
-    fig.suptitle("Scénario de Motivation: Performance du Servlet Standard ('Serv')", fontsize=16)
-    axes[0].plot(x, peak_perf_df['observed_rps'], 'o-b'); axes[0].set_title('RPS Max vs Taille'); axes[0].set_ylabel('req/s'); axes[0].grid(True)
-    axes[1].plot(x, peak_perf_df['transfer_MBs'], 'o-g'); axes[1].set_title('Bande Passante à RPS Max'); axes[1].set_ylabel('MB/s'); axes[1].grid(True)
-    axes[2].plot(x, peak_perf_df['vm_cpu_avg_percent'], 'o-r'); axes[2].set_title('CPU à RPS Max'); axes[2].set_ylabel('%'); axes[2].set_xlabel('Taille (KB)'); axes[2].set_ylim(0, 110); axes[2].grid(True)
-    plt.tight_layout(rect=[0,0,1,0.96]); plt.savefig(f"{plots_dir}/motivation_scenario.png"); plt.close()
+    peak = get_peak_performance(serv_df).sort_values('image_size_kb')
+    x = peak['image_size_kb']
+    fig, axes = plt.subplots(3,1,figsize=(12,18),sharex=True)
+    fig.suptitle("Motivation: Performance du Servlet Standard", fontsize=16)
+    axes[0].plot(x,peak['observed_rps'],'o-b'); axes[0].set_title('RPS Max vs Taille'); axes[0].set_ylabel('req/s'); axes[0].grid(True)
+    axes[1].plot(x,peak['transfer_MBs'],'o-g'); axes[1].set_title('Bande Passante à RPS Max'); axes[1].set_ylabel('MB/s'); axes[1].grid(True)
+    axes[2].plot(x,peak['vm_cpu_avg_percent'],'o-r'); axes[2].set_title('CPU à RPS Max'); axes[2].set_ylabel('%'); axes[2].set_xlabel('Taille (KB)'); axes[2].set_ylim(0,110); axes[2].grid(True)
+    plt.tight_layout(rect=[0,0,1,0.96]); plt.savefig(f"{plots_dir}/motivation.png"); plt.close()
     print("  > Graphiques de motivation sauvegardés.")
 
 def generate_comparison_table(df):
     print("\nGénération du tableau comparatif des RPSmax...")
-    peak_perf_df = get_peak_performance(df)
-    all_payloads = {**PAYLOADS, **FULL_PAYLOAD_POOL}
-    pivot = peak_perf_df.pivot_table(index='servlet_name', columns='image_name', values='observed_rps')
-    sorted_cols = sorted(pivot.columns, key=lambda x: all_payloads.get(x, 0))
-    pivot = pivot[sorted_cols]
-    print("\n" + "="*100); print("Tableau Comparatif des RPS Maximum (req/s)".center(100)); print("="*100)
-    print(pivot.to_string(float_format="%.2f")); print("="*100)
+    peak = get_peak_performance(df)
+    all_p = {**PAYLOADS, **FULL_PAYLOAD_POOL}
+    pivot = peak.pivot_table(index='servlet_name', columns='image_name', values='observed_rps')
+    pivot = pivot[sorted(pivot.columns, key=lambda c: all_p.get(c, 0))]
+    print("\n"+"="*120); print("Tableau Comparatif des RPS Maximum (req/s)".center(120)); print("="*120)
+    print(pivot.to_string(float_format="%.2f")); print("="*120)
 
 def analyze_latency_distribution(df):
-    print("\nLancement de l'analyse détaillée de la latence...")
-    latency_dir="latency_analysis"; os.makedirs(latency_dir, exist_ok=True)
-    target_images = ["1k.jpg", "10k.jpg", "100k.jpg", "1000k.jpg"]
-    df_subset = df[df['image_name'].isin(target_images)]
-    if df_subset.empty: return
-    peak_perf_df = get_peak_performance(df_subset)
-    for _, row in peak_perf_df.iterrows():
+    print("\nAnalyse détaillée de la latence...")
+    lat_dir="latency_analysis"; os.makedirs(lat_dir, exist_ok=True)
+    targets = ["1k.jpg", "10k.jpg", "100k.jpg", "1000k.jpg"]
+    df_sub = df[df['image_name'].isin(targets)]
+    if df_sub.empty: return
+    peak = get_peak_performance(df_sub)
+    for _, row in peak.iterrows():
         s, i, r = row['servlet_name'], row['image_name'], int(row['target_rate_rps'])
         strat = BENCHMARK_STRATEGIES[s]
-        print(f"\n  > Capture de l'histogramme pour '{s}' avec '{i}' à {r} RPS...")
+        print(f"\n  > Capture histogramme pour '{s}' avec '{i}' à {r} RPS...")
         url = f"http://{TOPOLOGY['intermediate_vm']['ip']}:8080{APPLICATIONS[s]['endpoint']}?machine={TOPOLOGY['backend_server']['hostname']}&image={i}"
-        hdr = f"{latency_dir}/{s}_{i.replace('.jpg','')}.hdr"
-        run_single_wrk2_test(url, r, **strat, hdr_histogram_output=hdr)
+        hdr = f"{lat_dir}/{s}_{i.replace('.jpg','')}.hdr"
+        run_single_wrk2_test(url, r, **{k:v for k,v in strat.items() if k in ['connections','threads','duration_seconds','timeout_seconds']}, hdr_histogram_output=hdr)
 
     print("\nGénération du graphique de distribution de la latence...")
-    plt.figure(figsize=(12, 8))
-    styles={'Serv':'blue', 'Serv-odb':'red'}; lines={'1k.jpg':'-', '10k.jpg':'--', '100k.jpg':':', '1000k.jpg':'-.'}
-    for _, row in peak_perf_df.iterrows():
-        s, i = row['servlet_name'], row['image_name']
-        hdr = f"{latency_dir}/{s}_{i.replace('.jpg','')}.hdr"
+    plt.figure(figsize=(12,8))
+    s={'Serv':'blue','Serv-odb':'red'}; l={'1k.jpg':'-','10k.jpg':'--','100k.jpg':':','1000k.jpg':'-.'}
+    for _, row in peak.iterrows():
+        s_name, i_name = row['servlet_name'], row['image_name']
+        hdr = f"{lat_dir}/{s_name}_{i_name.replace('.jpg','')}.hdr"
         if os.path.exists(hdr):
             try:
-                hist_df = pd.read_csv(hdr, skiprows=3, delim_whitespace=True, usecols=['Value', 'Percentile'], header=0)
-                plt.plot(hist_df['Percentile'], hist_df['Value']/1000.0, label=f'{s} - {i}', color=styles.get(s), linestyle=lines.get(i))
+                hist = pd.read_csv(hdr, skiprows=3, delim_whitespace=True, usecols=['Value','Percentile'], header=0)
+                plt.plot(hist['Percentile'], hist['Value']/1000.0, label=f'{s_name} - {i_name}', color=s.get(s_name), linestyle=l.get(i_name))
             except Exception as e: print(f"  ! Erreur parsing {hdr}: {e}")
     plt.title('Distribution de la Latence (HDR) aux RPS Maximum'); plt.xlabel('Percentile'); plt.ylabel('Latence (ms)')
-    plt.grid(True, which="both", ls="--"); plt.xscale('log'); plt.legend()
-    plt.savefig(f"{latency_dir}/latency_distribution_comparison.png"); plt.close()
+    plt.grid(True,which="both",ls="--"); plt.xscale('log'); plt.legend()
+    plt.savefig(f"{lat_dir}/latency_dist.png"); plt.close()
     print("  > Graphique de distribution sauvegardé.")
 
 if __name__ == "__main__":
     main()
+```
