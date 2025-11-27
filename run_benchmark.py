@@ -53,7 +53,7 @@ PAYLOADS = {
     "1k.jpg": 1.0,
     "10k.jpg": 10.0,
     "100k.jpg": 100.0,
-    "1000k.jpg": 1000.0
+    "1M.jpg": 1024.0
 }
 
 # Dictionnaire du grand pool de 50 images (nom_fichier -> taille_en_ko)
@@ -196,30 +196,74 @@ def run_scenarios(payloads, apps=None):
                     print("  ! Condition d'arrêt atteinte."); break
 
 def main():
-    parser=argparse.ArgumentParser(description="Script de benchmark ODB.")
-    parser.add_argument('--mode',type=str,default='all',choices=['all','motivation','random_table','latency'])
-    args=parser.parse_args()
+    parser = argparse.ArgumentParser(description="Script de benchmark ODB.")
+    parser.add_argument('--mode', type=str, default='all', choices=['all', 'motivation', 'random_table', 'latency'])
+    args = parser.parse_args()
     print(f"Mode d'exécution: {args.mode}")
 
-    if args.mode=='all':
-        write_reproducibility_report(PAYLOADS); initialize_csv(); run_scenarios(PAYLOADS)
-    elif args.mode=='motivation':
-        write_reproducibility_report(PAYLOADS); initialize_csv(); run_scenarios(PAYLOADS, {"Serv":APPLICATIONS["Serv"]})
-    elif args.mode=='random_table':
-        if not FULL_PAYLOAD_POOL: print("[ERREUR] FULL_PAYLOAD_POOL est vide."); return
-        names = random.sample(list(FULL_PAYLOAD_POOL.keys()),10)
-        payloads = {n:FULL_PAYLOAD_POOL[n] for n in names}
-        write_reproducibility_report(payloads); initialize_csv(); run_scenarios(payloads)
+    # Chaque mode de test génère son propre fichier de résultats pour éviter les écrasements.
+    # Le mode 'latency' est spécial : il ne génère pas de données, il en lit.
+    mode_to_csv = {
+        'all': 'results_all.csv',
+        'motivation': 'results_motivation.csv',
+        'random_table': 'results_random_table.csv'
+    }
 
-    try:
-        df = pd.read_csv(OUTPUT_FILES["raw_results_csv"])
-        if df.empty: print("Fichier de résultats vide."); return
-    except FileNotFoundError:
-        print(f"Fichier de résultats non trouvé. Exécutez d'abord une campagne."); return
+    # --- Lancement des campagnes de test (si applicable) ---
+    if args.mode in mode_to_csv:
+        OUTPUT_FILES['raw_results_csv'] = mode_to_csv[args.mode]
+        print(f"Les résultats bruts seront écrits dans : {OUTPUT_FILES['raw_results_csv']}")
 
-    if args.mode in ['all','motivation']: generate_motivation_plots(df)
-    if args.mode in ['all','random_table']: generate_comparison_table(df)
-    if args.mode in ['all','latency']: analyze_latency_distribution(df)
+        if args.mode == 'all':
+            write_reproducibility_report(PAYLOADS)
+            initialize_csv()
+            run_scenarios(PAYLOADS)
+        elif args.mode == 'motivation':
+            write_reproducibility_report(PAYLOADS)
+            initialize_csv()
+            run_scenarios(PAYLOADS, {"Serv": APPLICATIONS["Serv"]})
+        elif args.mode == 'random_table':
+            if not FULL_PAYLOAD_POOL:
+                print("[ERREUR] Le dictionnaire 'FULL_PAYLOAD_POOL' est vide. Veuillez le remplir.")
+                return
+            names = random.sample(list(FULL_PAYLOAD_POOL.keys()), 10)
+            payloads = {n: FULL_PAYLOAD_POOL[n] for n in names}
+            write_reproducibility_report(payloads)
+            initialize_csv()
+            run_scenarios(payloads)
+
+    # --- Lancement des analyses ---
+    analysis_file = None
+    if args.mode in ['all', 'motivation', 'random_table']:
+        analysis_file = mode_to_csv[args.mode]
+    elif args.mode == 'latency':
+        # L'analyse de latence dépend des données de la campagne 'all'.
+        analysis_file = 'results_all.csv'
+        if not os.path.exists(analysis_file):
+            print(f"[ERREUR] Fichier '{analysis_file}' introuvable. Veuillez d'abord exécuter le mode 'all' pour générer les données de base.")
+            return
+
+    if analysis_file and os.path.exists(analysis_file):
+        try:
+            df = pd.read_csv(analysis_file)
+            if df.empty:
+                print(f"Le fichier de résultats '{analysis_file}' est vide.")
+                return
+
+            # Exécuter les fonctions d'analyse appropriées pour le mode.
+            if args.mode in ['all', 'motivation']:
+                generate_motivation_plots(df)
+            if args.mode in ['all', 'random_table']:
+                generate_comparison_table(df)
+            if args.mode in ['all', 'latency']:
+                analyze_latency_distribution(df)
+
+        except Exception as e:
+            print(f"Une erreur est survenue lors de l'analyse du fichier '{analysis_file}': {e}")
+    elif args.mode not in ['all', 'motivation', 'random_table']:
+         print("Aucun fichier de résultats à analyser.")
+
+
     print("\nCampagne de benchmark terminée.")
 
 def get_peak_performance(df):
@@ -244,6 +288,7 @@ def generate_comparison_table(df):
     print("\nGénération du tableau comparatif des RPSmax...")
     peak = get_peak_performance(df)
     all_p = {**PAYLOADS, **FULL_PAYLOAD_POOL}
+    peak['image_size_kb'] = peak['image_name'].map({n:s for n,s in all_p.items()})
     pivot = peak.pivot_table(index='servlet_name', columns='image_name', values='observed_rps')
     pivot = pivot[sorted(pivot.columns, key=lambda c: all_p.get(c, 0))]
     print("\n"+"="*120); print("Tableau Comparatif des RPS Maximum (req/s)".center(120)); print("="*120)
@@ -252,7 +297,7 @@ def generate_comparison_table(df):
 def analyze_latency_distribution(df):
     print("\nAnalyse détaillée de la latence...")
     lat_dir="latency_analysis"; os.makedirs(lat_dir, exist_ok=True)
-    targets = ["1k.jpg", "10k.jpg", "100k.jpg", "1000k.jpg"]
+    targets = ["1k.jpg", "10k.jpg", "100k.jpg", "1M.jpg"]
     df_sub = df[df['image_name'].isin(targets)]
     if df_sub.empty: return
     peak = get_peak_performance(df_sub)
@@ -266,7 +311,7 @@ def analyze_latency_distribution(df):
 
     print("\nGénération du graphique de distribution de la latence...")
     plt.figure(figsize=(12,8))
-    s={'Serv':'blue','Serv-odb':'red'}; l={'1k.jpg':'-','10k.jpg':'--','100k.jpg':':','1000k.jpg':'-.'}
+    s={'Serv':'blue','Serv-odb':'red'}; l={'1k.jpg':'-','10k.jpg':'--','100k.jpg':':','1M.jpg':'-.'}
     for _, row in peak.iterrows():
         s_name, i_name = row['servlet_name'], row['image_name']
         hdr = f"{lat_dir}/{s_name}_{i_name.replace('.jpg','')}.hdr"
@@ -282,4 +327,3 @@ def analyze_latency_distribution(df):
 
 if __name__ == "__main__":
     main()
-```
