@@ -50,10 +50,10 @@ APPLICATIONS = { "Serv": {"name": "Serv", "endpoint": "/serv/Serv"}, "Serv-odb":
 
 # Dictionnaire des payloads de base (nom_fichier -> taille_en_ko)
 PAYLOADS = {
-    "1k.jpg": 1.0,
-    "10k.jpg": 10.0,
-    "100k.jpg": 100.0,
-    "1M.jpg": 1024.0
+    "image_1KB.jpg": 1.0,
+    "image_10KB.jpg": 10.0,
+    "image_100KB.jpg": 100.0,
+    "image_1000KB.jpg": 1000.0
 }
 
 # Dictionnaire du grand pool de 50 images (nom_fichier -> taille_en_ko)
@@ -125,16 +125,55 @@ def _parse_bytes(b):
     return 0.0
 
 def _parse_wrk2_output(output):
-    res = {}
-    res['observed_rps'] = float(m.group(1)) if (m := re.search(r'Requests/sec:\s*([\d\.]+)', output)) else 0
-    res['transfer_MBs'] = _parse_bytes(m.group(1)) if (m := re.search(r'Transfer/sec:\s*([\d\.]+[kKmMgG]B)', output)) else 0
-    res['total_requests'] = int(m.group(1)) if (m := re.search(r'([\d]+) requests in', output)) else 0
-    if m := re.search(r'Socket errors: connect (\d+), read (\d+), write (\d+), timeout (\d+)', output):
-        res.update(errors_connect=int(m.group(1)), errors_read=int(m.group(2)), errors_write=int(m.group(3)), errors_timeout=int(m.group(4)), total_errors=sum(map(int, m.groups())))
-    else: res.update(errors_connect=0, errors_read=0, errors_write=0, errors_timeout=0, total_errors=0)
-    if m := re.search(r'Latency Distribution\s+50%\s+([\d\.\w]+)\s+75%\s+([\d\.\w]+)\s+90%\s+([\d\.\w]+)\s+99%\s+([\d\.\w]+)', output):
-        res.update(latency_p50_ms=_parse_time(m.group(1)), latency_p75_ms=_parse_time(m.group(2)), latency_p90_ms=_parse_time(m.group(3)), latency_p99_ms=_parse_time(m.group(4)))
-    res['latency_avg_ms'] = _parse_time(m.group(1)) if (m := re.search(r'Latency\s+([\d\.\w]+)\s+', output)) else 0
+    res = {
+        'observed_rps': 0, 'transfer_MBs': 0, 'total_requests': 0,
+        'errors_connect': 0, 'errors_read': 0, 'errors_write': 0, 'errors_timeout': 0, 'total_errors': 0,
+        'latency_p50_ms': 0, 'latency_p75_ms': 0, 'latency_p90_ms': 0, 'latency_p99_ms': 0, 'latency_avg_ms': 0
+    }
+
+    # Utiliser des blocs try-except pour chaque extraction rend le parsing robuste.
+    # Si une section est manquante (par exemple, 'Latency Distribution' en cas d'erreur), le script continue.
+    try:
+        res['observed_rps'] = float(re.search(r'Requests/sec:\s*([\d\.]+)', output).group(1))
+    except (AttributeError, ValueError): pass
+
+    try:
+        res['transfer_MBs'] = _parse_bytes(re.search(r'Transfer/sec:\s*([\d\.]+[kKmMgG]B)', output).group(1))
+    except (AttributeError, ValueError): pass
+
+    try:
+        res['total_requests'] = int(re.search(r'([\d]+) requests in', output).group(1))
+    except (AttributeError, ValueError): pass
+
+    try:
+        if m := re.search(r'Socket errors: connect (\d+), read (\d+), write (\d+), timeout (\d+)', output):
+            res.update(
+                errors_connect=int(m.group(1)),
+                errors_read=int(m.group(2)),
+                errors_write=int(m.group(3)),
+                errors_timeout=int(m.group(4)),
+                total_errors=sum(map(int, m.groups()))
+            )
+    except (AttributeError, ValueError): pass
+
+    try:
+        # La ligne "Latency" peut être suivie de "Distribution", causant une erreur de conversion.
+        # Nous cherchons donc une ligne qui commence par "Latency" mais n'est pas "Latency Distribution".
+        # Le lookahead négatif (?!...) est parfait pour ça.
+        if m := re.search(r'Latency\s+([\d\.\w]+)\s+(?!Distribution)', output):
+             res['latency_avg_ms'] = _parse_time(m.group(1))
+    except (AttributeError, ValueError): pass
+
+    try:
+        if m := re.search(r'Latency Distribution\s+50%\s+([\d\.\w]+)\s+75%\s+([\d\.\w]+)\s+90%\s+([\d\.\w]+)\s+99%\s+([\d\.\w]+)', output):
+            res.update(
+                latency_p50_ms=_parse_time(m.group(1)),
+                latency_p75_ms=_parse_time(m.group(2)),
+                latency_p90_ms=_parse_time(m.group(3)),
+                latency_p99_ms=_parse_time(m.group(4))
+            )
+    except (AttributeError, ValueError): pass
+
     return res
 
 def _parse_mpstat_output(output):
