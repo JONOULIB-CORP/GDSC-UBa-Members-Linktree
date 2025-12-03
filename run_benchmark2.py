@@ -50,10 +50,10 @@ APPLICATIONS = { "Serv": {"name": "Serv", "endpoint": "/serv/Serv"}, "Serv-odb":
 
 # Dictionnaire des payloads de base (nom_fichier -> taille_en_ko)
 PAYLOADS = {
-    "image_1KB.jpg": 1.0,
-    "image_10KB.jpg": 10.0,
-    "image_100KB.jpg": 100.0,
-    "image_1000KB.jpg": 1000.0
+    "1k.jpg": 1.0,
+    "10k.jpg": 10.0,
+    "100k.jpg": 100.0,
+    "1M.jpg": 1024.0
 }
 
 # Dictionnaire du grand pool de 50 images (nom_fichier -> taille_en_ko)
