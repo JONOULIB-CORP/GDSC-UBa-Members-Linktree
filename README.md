@@ -1,72 +1,42 @@
-# GDSC UBA LINKTREE
+# Guide d'Exécution du Pipeline de Benchmark Automatisé sur Grid'5000
 
-This is a repository containing the links to the members of the GDSC UBA community.
+Ce projet fournit un pipeline entièrement automatisé pour déployer un environnement complexe sur Grid'5000, exécuter une série de benchmarks de performance, et sauvegarder les résultats.
 
-# 🎃 HacktoberFest 2022 🎃
+## Architecture
 
-If you came here for Hacktoberfest, you're in the right place 🦇️:
+Le système est conçu pour être à la fois simple et puissant, reposant sur 4 fichiers principaux :
 
-Celebrate [Hacktoberfest](https://hacktoberfest.com/) by getting involved in the open source community by completing some tasks in this project.
+1.  `user_config.py`: Fichier de configuration **unique** où vous définissez tous vos paramètres (login Grid'5000, paramètres de la VM, payloads, etc.).
+2.  `setup_g5k.sh`: Script de déploiement qui prépare l'intégralité de l'environnement (réservation de nœuds, création de VM, installations, etc.).
+3.  `run_benchmark.py`: Script d'évaluation qui exécute les tests de performance.
+4.  `run_full_pipeline.sh`: **Script maître et unique point d'entrée** qui orchestre les deux scripts précédents pour une automatisation complète.
 
-## What is Hacktoberfest?
+## Workflow en 3 Étapes Simples
 
-[HacktoberFest](https://hacktoberfest.com/](https://hacktoberfest.com/) is digitalocean’s annual event that encourages people to contribute to open source throughout october. Much of modern tech infrastructure—including some of digitalocean’s own products—relies on open-source projects built and maintained by passionate people who often don’t have the staff or budgets to do much more than keep the project alive. HacktoberFest is all about giving back to those projects, sharpening skills, and celebrating all things open source, especially the people that make open source so special.
+### Étape 1 : Configurer `user_config.py`
 
-This repository is open to all members of the GitHub community. Any member may contribute to this project without being a collaborator.
+C'est la **seule chose à faire** avant de lancer une expérience. Ouvrez ce fichier et personnalisez les variables selon vos besoins.
 
-## How can I contribute?
+### Étape 2 : Lancer le Pipeline Complet
 
-Contributions
-There is 1 Task available and each task will be considered as valid by the Hacktoberfest team if properly carried out. Below is the task:
+Exécutez le script maître. Il s'occupera de tout, sans aucune autre intervention manuelle.
 
-Prerequisite Fork and Make the project available locally. Run the command below for that:
+```bash
+# Rendez le script exécutable (une seule fois)
+chmod +x run_full_pipeline.sh
 
-    git clone https://github.com/Developer-Student-Clubs-UBa/GDSC-UBa-Members-Linktree.git
-
-Create a branch for the task
-
-```
-    git branch -M mylinktree
-
-    git checkout mylinktree
+# Lancez le pipeline complet
+./run_full_pipeline.sh
 ```
 
-After that, follow the steps below.
-Step 1: Head over to our twitter and linkedIn accounts
-Step 2: Copy the links to these accounts
-Step 3: - Make your changes. Create a file(filename=`<your-githubusername.json>
-- Add your details following the example below.
-- Respect the Json formatting
-  ```json
-  [
-    {
-      "name": "your_name",
-      "linkedIn_link": "https://linkedin.com/in/username",
-      "github_link": "https://github.com/username"
-    }
-  ]
-  ```
+Le script va :
+1.  Lancer `setup_g5k.sh` pour déployer l'environnement.
+2.  Attendre que le déploiement soit terminé.
+3.  Se connecter au nœud client.
+4.  Lancer automatiquement les trois scénarios de benchmark (`motivation`, `random_table`, `latency`).
 
-Step 4: Commit the change made and push
+### Étape 3 : Récupérer vos Résultats
 
-```
-   git add <your-githubusername.json>
-   
-    git commit -am "feat: add <username> linktree"
+Une fois le pipeline terminé, tous les résultats (fichiers `.csv`, graphiques, rapports) sont stockés dans le répertoire `mesures` sur le **nœud client**.
 
-    git push origin HEAD
-```
-
-Come back to our github repo here and do a pull request.
-
-![open a pull request](https://i0.wp.com/user-images.githubusercontent.com/3477155/52671177-5d0e0100-2ee8-11e9-8645-bdd923b7d93b.gif?resize=1024%2C512&ssl=1)
-
-## Submission
-
-To submit your task, create a pull request to this repository. You can find more information about how to create a pull request [here](https://docs.github.com/en/github/collaborating-with-issues-and-pull-requests/creating-a-pull-request).
-
-- Done!
-
-## Cheers 🍻 to our contributors
-
-![Contributors](./CONTRIBUTORS.svg)
+Le script vous affichera à la fin la commande `scp` à utiliser pour copier ces résultats sur votre machine locale. N'oubliez pas de libérer vos ressources Grid'5000 avec la commande `oardel` qui vous sera également fournie.

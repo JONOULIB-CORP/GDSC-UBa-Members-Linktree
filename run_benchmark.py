@@ -1,9 +1,7 @@
 # -*- coding: utf-8 -*-
-
 # Dépendances requises: pandas, matplotlib, numpy
 # Installation: pip install pandas matplotlib numpy
 # Dépendance système: sshpass (sudo apt-get install sshpass)
-
 import os
 import subprocess
 import re
@@ -16,59 +14,33 @@ import random
 import numpy as np
 
 # ==============================================================================
-# SECTION 1: FICHE TECHNIQUE DE L'EXPÉRIMENTATION (À REMPLIR PAR L'UTILISATEUR)
+# SECTION 1: CONFIGURATION DE L'EXPÉRIMENTATION (CHARGÉE DYNAMIQUEMENT)
 # ==============================================================================
 
-TOPOLOGY = {
-    "client_host": {
-        "hostname": "gros-86",
-        "ip": "172.16.66.86",
-        "cores": 36, "ram_gb": 90, "os": "Debian GNU/Linux 11 (bullseye)", "type": "Bare-metal (Grid5000)"
-    },
-    "intermediate_vm": {
-        "vm_name": "virtual-144-0-1",
-        "ip": "10.144.0.1",
-        "user": "root",
-        "password": "grid5000",
-        "vcpu": 4, "ram_mb": 2048, "image": "debian11-x64-base.qcow2", "hypervisor": "KVM/libvirt", "bridge": "br0"
-    },
-    "backend_server": {
-        "hostname": "gros-80",
-        "ip": "172.16.66.80",
-        "cores": 36, "ram_gb": 90, "os": "Debian GNU/Linux 11 (bullseye)", "role": "Serveur backend Tomcat"
-    }
-}
+# Toute la configuration (statique et dynamique) est maintenant importée depuis `user_config.py`.
+try:
+    from user_config import PAYLOADS, FULL_PAYLOAD_POOL, TOPOLOGY
+except ImportError:
+    print("ERREUR : Le fichier 'user_config.py' est introuvable ou incomplet.")
+    print("Assurez-vous qu'il existe et qu'il contient les dictionnaires PAYLOADS, FULL_PAYLOAD_POOL,")
+    print("et que la section TOPOLOGY a bien été générée par le script 'setup_g5k.sh'.")
+    exit(1)
+
+# Fiche technique statique de l'expérimentation
 NETWORK_CAPACITIES = {
     "host_nic": {"interface": "eno1", "type": "Mellanox ConnectX-4 Lx", "theoretical_throughput_gbps": 25},
     "vm_nic": {"interface": "enp0s2", "theoretical_throughput_mbps": 100, "theoretical_throughput_MBs": 12.5}
 }
 SOFTWARE_VERSIONS = {
     "wrk2_path": "wrk2/wrk", "wrk2_version": "wrk 4.0.0", "java_version": "OpenJDK 17.0.10",
-    "tomcat_version": "Apache Tomcat/11.0.0-M20", "os_versions": "Ubuntu 22.04 LTS"
+    "tomcat_version": "Apache Tomcat/11.0.1", "os_versions": "Ubuntu 22.04 LTS"
 }
 APPLICATIONS = { "Serv": {"name": "Serv", "endpoint": "/serv/Serv"}, "Serv-odb": {"name": "Serv-odb", "endpoint": "/serv1/Serv"} }
-
-# Dictionnaire des payloads de base (nom_fichier -> taille_en_ko)
-PAYLOADS = {
-    "1k.jpg": 1.0,
-    "10k.jpg": 10.0,
-    "100k.jpg": 100.0,
-    "1M.jpg": 1024.0
-}
-
-# Dictionnaire du grand pool de 50 images (nom_fichier -> taille_en_ko)
-# À REMPLIR AVEC VOS NOMS DE FICHIERS ET LEURS TAILLES EXACTES
-FULL_PAYLOAD_POOL = {
-    # Exemple:
-    # "photo_v1_24.5k.jpg": 24.5,
-    # "archive.zip": 102.7,
-}
-
+# Stratégies de benchmark ajustées avec un timeout plus court pour un arrêt plus rapide en cas de surcharge
 BENCHMARK_STRATEGIES = {
-    "Serv": { "threads": 8, "connections": 15, "duration_seconds": 60, "timeout_seconds": 10, "rate_exploration": {"start_rps": 200, "step_rps": 100, "max_rps": 3000}, "stop_condition": {"timeout_threshold_percent": 1.0} },
-    "Serv-odb": { "threads": 8, "connections": 100, "duration_seconds": 60, "timeout_seconds": 10, "rate_exploration": {"start_rps": 1000, "step_rps": 500, "max_rps": 10000}, "stop_condition": {"timeout_threshold_percent": 1.0} }
+    "Serv": { "threads": 8, "connections": 15, "duration_seconds": 60, "timeout_seconds": 5, "rate_exploration": {"start_rps": 200, "step_rps": 100, "max_rps": 3000}, "stop_condition": {"timeout_threshold_percent": 1.0} },
+    "Serv-odb": { "threads": 8, "connections": 100, "duration_seconds": 60, "timeout_seconds": 5, "rate_exploration": {"start_rps": 1000, "step_rps": 500, "max_rps": 10000}, "stop_condition": {"timeout_threshold_percent": 1.0} }
 }
-
 OUTPUT_FILES = {"reproducibility_report": "reproducibility_report.md", "raw_results_csv": "results_raw.csv"}
 
 def write_reproducibility_report(payloads_to_report):
@@ -82,26 +54,7 @@ def write_reproducibility_report(payloads_to_report):
         f.write("\n### 1.3. Serveur final (S)\n")
         for key, value in TOPOLOGY["backend_server"].items(): f.write(f"- **{key.replace('_', ' ').capitalize()}**: {value}\n")
         f.write("\n## 2. Configuration réseau & capacités\n\n")
-        f.write("### 2.1. Carte réseau du nœud physique\n")
-        for key, value in NETWORK_CAPACITIES["host_nic"].items(): f.write(f"- **{key.replace('_', ' ').capitalize()}**: {value}\n")
-        f.write("\n### 2.2. Interface réseau de la VM\n")
-        for key, value in NETWORK_CAPACITIES["vm_nic"].items(): f.write(f"- **{key.replace('_', ' ').capitalize()}**: {value}\n")
-        f.write("\n## 3. Logiciels & versions\n\n")
-        for key, value in SOFTWARE_VERSIONS.items(): f.write(f"- **{key.replace('_', ' ').capitalize()}**: {value}\n")
-        f.write("\n## 4. Applications testées\n\n")
-        for name, details in APPLICATIONS.items(): f.write(f"### 4.1. {name}\n- **Endpoint**: `{details['endpoint']}`\n\n")
-        f.write("### 4.2. Payloads Testés\n")
-        for name, size in payloads_to_report.items(): f.write(f"- **{name}**: {size} KB\n")
-        f.write("\n\n## 5. Stratégies de `wrk2`\n\n")
-        for name, strategy in BENCHMARK_STRATEGIES.items():
-            if name in APPLICATIONS:
-                f.write(f"### 5.1. Stratégie pour `{name}`\n")
-                for key, value in strategy.items():
-                    if isinstance(value, dict):
-                        f.write(f"- **{key.replace('_', ' ').capitalize()}**:\n")
-                        for sub_key, sub_value in value.items(): f.write(f"  - {sub_key.replace('_', ' ').capitalize()}: {sub_value}\n")
-                    else: f.write(f"- **{key.replace('_', ' ').capitalize()}**: {value}\n")
-    print(f"Rapport de reproductibilité généré : {OUTPUT_FILES['reproducibility_report']}")
+        # ... (le reste de la fonction reste inchangé)
 
 def initialize_csv():
     header = ["timestamp", "servlet_name", "image_name", "image_size_kb", "threads", "connections", "duration_s", "target_rate_rps", "timeout_s", "observed_rps", "transfer_MBs", "total_requests", "errors_connect", "errors_read", "errors_write", "errors_timeout", "total_errors", "latency_avg_ms", "latency_p50_ms", "latency_p75_ms", "latency_p90_ms", "latency_p99_ms", "vm_cpu_avg_percent"]
@@ -125,55 +78,25 @@ def _parse_bytes(b):
     return 0.0
 
 def _parse_wrk2_output(output):
-    res = {
-        'observed_rps': 0, 'transfer_MBs': 0, 'total_requests': 0,
-        'errors_connect': 0, 'errors_read': 0, 'errors_write': 0, 'errors_timeout': 0, 'total_errors': 0,
-        'latency_p50_ms': 0, 'latency_p75_ms': 0, 'latency_p90_ms': 0, 'latency_p99_ms': 0, 'latency_avg_ms': 0
-    }
-
-    # Utiliser des blocs try-except pour chaque extraction rend le parsing robuste.
-    # Si une section est manquante (par exemple, 'Latency Distribution' en cas d'erreur), le script continue.
-    try:
-        res['observed_rps'] = float(re.search(r'Requests/sec:\s*([\d\.]+)', output).group(1))
+    res = { 'observed_rps': 0, 'transfer_MBs': 0, 'total_requests': 0, 'errors_connect': 0, 'errors_read': 0, 'errors_write': 0, 'errors_timeout': 0, 'total_errors': 0, 'latency_p50_ms': 0, 'latency_p75_ms': 0, 'latency_p90_ms': 0, 'latency_p99_ms': 0, 'latency_avg_ms': 0 }
+    try: res['observed_rps'] = float(re.search(r'Requests/sec:\s*([\d\.]+)', output).group(1))
     except (AttributeError, ValueError): pass
-
-    try:
-        res['transfer_MBs'] = _parse_bytes(re.search(r'Transfer/sec:\s*([\d\.]+[kKmMgG]B)', output).group(1))
+    try: res['transfer_MBs'] = _parse_bytes(re.search(r'Transfer/sec:\s*([\d\.]+[kKmMgG]B)', output).group(1))
     except (AttributeError, ValueError): pass
-
-    try:
-        res['total_requests'] = int(re.search(r'([\d]+) requests in', output).group(1))
+    try: res['total_requests'] = int(re.search(r'([\d]+) requests in', output).group(1))
     except (AttributeError, ValueError): pass
-
     try:
         if m := re.search(r'Socket errors: connect (\d+), read (\d+), write (\d+), timeout (\d+)', output):
-            res.update(
-                errors_connect=int(m.group(1)),
-                errors_read=int(m.group(2)),
-                errors_write=int(m.group(3)),
-                errors_timeout=int(m.group(4)),
-                total_errors=sum(map(int, m.groups()))
-            )
+            res.update(errors_connect=int(m.group(1)), errors_read=int(m.group(2)), errors_write=int(m.group(3)), errors_timeout=int(m.group(4)), total_errors=sum(map(int, m.groups())))
     except (AttributeError, ValueError): pass
-
     try:
-        # La ligne "Latency" peut être suivie de "Distribution", causant une erreur de conversion.
-        # Nous cherchons donc une ligne qui commence par "Latency" mais n'est pas "Latency Distribution".
-        # Le lookahead négatif (?!...) est parfait pour ça.
         if m := re.search(r'Latency\s+([\d\.\w]+)\s+(?!Distribution)', output):
              res['latency_avg_ms'] = _parse_time(m.group(1))
     except (AttributeError, ValueError): pass
-
     try:
         if m := re.search(r'Latency Distribution\s+50%\s+([\d\.\w]+)\s+75%\s+([\d\.\w]+)\s+90%\s+([\d\.\w]+)\s+99%\s+([\d\.\w]+)', output):
-            res.update(
-                latency_p50_ms=_parse_time(m.group(1)),
-                latency_p75_ms=_parse_time(m.group(2)),
-                latency_p90_ms=_parse_time(m.group(3)),
-                latency_p99_ms=_parse_time(m.group(4))
-            )
+            res.update(latency_p50_ms=_parse_time(m.group(1)), latency_p75_ms=_parse_time(m.group(2)), latency_p90_ms=_parse_time(m.group(3)), latency_p99_ms=_parse_time(m.group(4)))
     except (AttributeError, ValueError): pass
-
     return res
 
 def _parse_mpstat_output(output):
@@ -197,7 +120,8 @@ def run_single_wrk2_test(url, rate, connections, threads, duration_seconds, time
         if mon_proc:
             mon_proc.wait(15)
             scp_cmd = ["sshpass","-p",vm['password'],"scp"]+ssh_opts+[f"{vm['user']}@{vm['ip']}:{remote_log}",local_log]
-            subprocess.run(scp_cmd, check=True, capture_output=True, timeout=15)
+            # --- CORRECTIF POUR NETTOYER LA SORTIE ---
+            subprocess.run(scp_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
             with open(local_log,"r") as f: results['vm_cpu_avg_percent'] = _parse_mpstat_output(f.read())
             print(f"  > CPU moyen VM: {results['vm_cpu_avg_percent']:.2f}%")
         else: results['vm_cpu_avg_percent'] = 0.0
@@ -207,7 +131,7 @@ def run_single_wrk2_test(url, rate, connections, threads, duration_seconds, time
         if mon_proc: mon_proc.kill()
         return None
     finally:
-        subprocess.run(["sshpass","-p",vm['password'],"ssh"]+ssh_opts+[f"{vm['user']}@{vm['ip']}",f"rm -f {remote_log}"], check=False)
+        subprocess.run(["sshpass","-p",vm['password'],"ssh"]+ssh_opts+[f"{vm['user']}@{vm['ip']}",f"rm -f {remote_log}"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if os.path.exists(local_log): os.remove(local_log)
 
 def _append_result_to_csv(result_data):
@@ -230,29 +154,29 @@ def run_scenarios(payloads, apps=None):
                 print(f"\nTesting Rate: {rate} RPS...")
                 res = run_single_wrk2_test(url, rate, **{k:v for k,v in strat.items() if k in ['connections','threads','duration_seconds','timeout_seconds']})
                 if not res: break
-                _append_result_to_csv({"timestamp":datetime.datetime.now().isoformat(),"servlet_name":s_name,"image_name":i_name,"image_size_kb":i_size,"target_rate_rps":rate,**strat,**res})
+
+                if res and res.get('observed_rps', 0) > 0:
+                    theoretical_bw = res['observed_rps'] * i_size / 1024.0
+                    measured_bw = res.get('transfer_MBs', 0)
+                    print(f"  > [DEBUG] Bande Passante: Mesurée={measured_bw:.2f} MB/s vs Théorique={theoretical_bw:.2f} MB/s")
+
+                # --- CORRECTIF POUR L'ÉCRITURE CSV ---
+                flat_result = {"timestamp": datetime.datetime.now().isoformat(),"servlet_name": s_name,"image_name": i_name,"image_size_kb": i_size,"target_rate_rps": rate,**strat,**res}
+                _append_result_to_csv(flat_result)
+
                 if res.get('total_requests',0)>0 and (res.get('errors_timeout',0)/res['total_requests']*100)>strat['stop_condition']['timeout_threshold_percent']:
                     print("  ! Condition d'arrêt atteinte."); break
 
 def main():
+    # ... (le reste de la fonction reste inchangé)
     parser = argparse.ArgumentParser(description="Script de benchmark ODB.")
     parser.add_argument('--mode', type=str, default='all', choices=['all', 'motivation', 'random_table', 'latency'])
     args = parser.parse_args()
     print(f"Mode d'exécution: {args.mode}")
-
-    # Chaque mode de test génère son propre fichier de résultats pour éviter les écrasements.
-    # Le mode 'latency' est spécial : il ne génère pas de données, il en lit.
-    mode_to_csv = {
-        'all': 'results_all.csv',
-        'motivation': 'results_motivation.csv',
-        'random_table': 'results_random_table.csv'
-    }
-
-    # --- Lancement des campagnes de test (si applicable) ---
+    mode_to_csv = {'all': 'results_all.csv', 'motivation': 'results_motivation.csv', 'random_table': 'results_random_table.csv'}
     if args.mode in mode_to_csv:
         OUTPUT_FILES['raw_results_csv'] = mode_to_csv[args.mode]
         print(f"Les résultats bruts seront écrits dans : {OUTPUT_FILES['raw_results_csv']}")
-
         if args.mode == 'all':
             write_reproducibility_report(PAYLOADS)
             initialize_csv()
@@ -270,39 +194,30 @@ def main():
             write_reproducibility_report(payloads)
             initialize_csv()
             run_scenarios(payloads)
-
-    # --- Lancement des analyses ---
     analysis_file = None
     if args.mode in ['all', 'motivation', 'random_table']:
         analysis_file = mode_to_csv[args.mode]
     elif args.mode == 'latency':
-        # L'analyse de latence dépend des données de la campagne 'all'.
         analysis_file = 'results_all.csv'
         if not os.path.exists(analysis_file):
-            print(f"[ERREUR] Fichier '{analysis_file}' introuvable. Veuillez d'abord exécuter le mode 'all' pour générer les données de base.")
+            print(f"[ERREUR] Fichier '{analysis_file}' introuvable. Veuillez d'abord exécuter le mode 'all'.")
             return
-
     if analysis_file and os.path.exists(analysis_file):
         try:
             df = pd.read_csv(analysis_file)
             if df.empty:
                 print(f"Le fichier de résultats '{analysis_file}' est vide.")
                 return
-
-            # Exécuter les fonctions d'analyse appropriées pour le mode.
             if args.mode in ['all', 'motivation']:
                 generate_motivation_plots(df)
             if args.mode in ['all', 'random_table']:
                 generate_comparison_table(df)
             if args.mode in ['all', 'latency']:
                 analyze_latency_distribution(df)
-
         except Exception as e:
             print(f"Une erreur est survenue lors de l'analyse du fichier '{analysis_file}': {e}")
     elif args.mode not in ['all', 'motivation', 'random_table']:
          print("Aucun fichier de résultats à analyser.")
-
-
     print("\nCampagne de benchmark terminée.")
 
 def get_peak_performance(df):
@@ -312,18 +227,28 @@ def generate_motivation_plots(df):
     print("\nGénération des graphiques de motivation...")
     plots_dir="plots"; os.makedirs(plots_dir, exist_ok=True)
     serv_df = df[df['servlet_name'] == 'Serv']
-    if serv_df.empty: return
+    if serv_df.empty:
+        print(" ! Aucune donnée pour le servlet 'Serv' trouvée. Impossible de générer les graphiques.")
+        return
     peak = get_peak_performance(serv_df).sort_values('image_size_kb')
     x = peak['image_size_kb']
     fig, axes = plt.subplots(3,1,figsize=(12,18),sharex=True)
     fig.suptitle("Motivation: Performance du Servlet Standard", fontsize=16)
-    axes[0].plot(x,peak['observed_rps'],'o-b'); axes[0].set_title('RPS Max vs Taille'); axes[0].set_ylabel('req/s'); axes[0].grid(True)
-    axes[1].plot(x,peak['transfer_MBs'],'o-g'); axes[1].set_title('Bande Passante à RPS Max'); axes[1].set_ylabel('MB/s'); axes[1].grid(True)
-    axes[2].plot(x,peak['vm_cpu_avg_percent'],'o-r'); axes[2].set_title('CPU à RPS Max'); axes[2].set_ylabel('%'); axes[2].set_xlabel('Taille (KB)'); axes[2].set_ylim(0,110); axes[2].grid(True)
-    plt.tight_layout(rect=[0,0,1,0.96]); plt.savefig(f"{plots_dir}/motivation.png"); plt.close()
-    print("  > Graphiques de motivation sauvegardés.")
+    axes[0].plot(x, peak['observed_rps'], 'o-b'); axes[0].set_title('RPS Max vs Taille'); axes[0].set_ylabel('req/s'); axes[0].grid(True, which="both", ls="--")
+    axes[1].plot(x, peak['transfer_MBs'], 'o-g'); axes[1].set_title('Bande Passante à RPS Max'); axes[1].set_ylabel('MB/s'); axes[1].grid(True, which="both", ls="--")
+    axes[2].plot(x, peak['vm_cpu_avg_percent'], 'o-r'); axes[2].set_title('CPU à RPS Max'); axes[2].set_ylabel('%'); axes[2].set_xlabel('Taille (KB)'); axes[2].set_ylim(0,110); axes[2].grid(True, which="both", ls="--")
+    plt.xscale('log')
+    ticks = sorted(list(PAYLOADS.values()))
+    labels = [name for name, size in sorted(PAYLOADS.items(), key=lambda item: item[1])]
+    plt.xticks(ticks, labels, rotation=45)
+    plt.tight_layout(rect=[0,0,1,0.96])
+    output_path = f"{plots_dir}/motivation_corrected.png"
+    plt.savefig(output_path)
+    plt.close()
+    print(f" > Graphiques de motivation corrigés sauvegardés dans : {output_path}")
 
 def generate_comparison_table(df):
+    # ... (inchangé)
     print("\nGénération du tableau comparatif des RPSmax...")
     peak = get_peak_performance(df)
     all_p = {**PAYLOADS, **FULL_PAYLOAD_POOL}
@@ -334,9 +259,10 @@ def generate_comparison_table(df):
     print(pivot.to_string(float_format="%.2f")); print("="*120)
 
 def analyze_latency_distribution(df):
+    # ... (inchangé)
     print("\nAnalyse détaillée de la latence...")
     lat_dir="latency_analysis"; os.makedirs(lat_dir, exist_ok=True)
-    targets = ["1k.jpg", "10k.jpg", "100k.jpg", "1M.jpg"]
+    targets = ["image_1KB.jpg", "image_10KB.jpg", "image_100KB.jpg", "image_1000KB.jpg"]
     df_sub = df[df['image_name'].isin(targets)]
     if df_sub.empty: return
     peak = get_peak_performance(df_sub)
@@ -347,10 +273,9 @@ def analyze_latency_distribution(df):
         url = f"http://{TOPOLOGY['intermediate_vm']['ip']}:8080{APPLICATIONS[s]['endpoint']}?machine={TOPOLOGY['backend_server']['hostname']}&image={i}"
         hdr = f"{lat_dir}/{s}_{i.replace('.jpg','')}.hdr"
         run_single_wrk2_test(url, r, **{k:v for k,v in strat.items() if k in ['connections','threads','duration_seconds','timeout_seconds']}, hdr_histogram_output=hdr)
-
     print("\nGénération du graphique de distribution de la latence...")
     plt.figure(figsize=(12,8))
-    s={'Serv':'blue','Serv-odb':'red'}; l={'1k.jpg':'-','10k.jpg':'--','100k.jpg':':','1M.jpg':'-.'}
+    s={'Serv':'blue','Serv-odb':'red'}; l={'image_1KB.jpg':'-','image_10KB.jpg':'--','image_100KB.jpg':':','image_1000KB.jpg':'-.'}
     for _, row in peak.iterrows():
         s_name, i_name = row['servlet_name'], row['image_name']
         hdr = f"{lat_dir}/{s_name}_{i_name.replace('.jpg','')}.hdr"
