@@ -13,7 +13,7 @@
 
 # --- Configuration Grid'5000 pour le déploiement ---
 # Votre nom d'utilisateur Grid'5000
-G5K_USER = "mteumou"
+G5K_USER = "votre_login_g5k"
 
 # Le site sur lequel vous voulez lancer l'expérience (ex: "toulouse", "grenoble")
 G5K_SITE = "toulouse"
@@ -36,7 +36,6 @@ VM_DISK_SIZE = "20G"
 VM_RAM_MB = "2048"
 VM_VCPUS = "4"
 VM_BASE_IMAGE_PATH = "/grid5000/virt-images/ubuntu2204-x64-min-2025072816.qcow2"
-VM_MAC_ADDRESS = '00:16:3E:90:1C:01'
 
 
 # --- Configuration de l'Expérience de Benchmark ---

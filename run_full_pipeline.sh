@@ -41,14 +41,17 @@ echo "--- Connecté à \$HOSTNAME. Lancement des benchmarks ---"
 
 cd "/root/$REMOTE_PROJECT_NAME"
 
-echo -e "\n--- Lancement du scénario 'motivation' ---"
+echo -e "\n--- Lancement du scénario 'motivation' (test Serv) ---"
 python3 run_benchmark.py --mode motivation
 
-echo -e "\n--- Lancement du scénario 'random_table' ---"
-python3 run_benchmark.py --mode random_table
+echo -e "\n--- Lancement du scénario 'odb_test' (test Serv-odb) ---"
+python3 run_benchmark.py --mode odb_test
 
-echo -e "\n--- Lancement du scénario 'latency' ---"
+echo -e "\n--- Lancement du scénario 'latency' (fusion et analyse) ---"
 python3 run_benchmark.py --mode latency
+
+echo -e "\n--- Lancement du scénario 'random_table' (comparaison sur échantillon) ---"
+python3 run_benchmark.py --mode random_table
 
 echo "--- Tous les scénarios de benchmark sont terminés. ---"
 EOF

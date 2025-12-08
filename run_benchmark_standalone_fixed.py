@@ -17,14 +17,36 @@ import numpy as np
 # SECTION 1: CONFIGURATION DE L'EXPÉRIMENTATION (CHARGÉE DYNAMIQUEMENT)
 # ==============================================================================
 
-# Toute la configuration (statique et dynamique) est maintenant importée depuis `user_config.py`.
-try:
-    from user_config import PAYLOADS, FULL_PAYLOAD_POOL, TOPOLOGY
-except ImportError:
-    print("ERREUR : Le fichier 'user_config.py' est introuvable ou incomplet.")
-    print("Assurez-vous qu'il existe et qu'il contient les dictionnaires PAYLOADS, FULL_PAYLOAD_POOL,")
-    print("et que la section TOPOLOGY a bien été générée par le script 'setup_g5k.sh'.")
-    exit(1)
+# ==============================================================================
+# SECTION 1: FICHE TECHNIQUE DE L'EXPÉRIMENTATION (CONFIGURATION STATIQUE)
+# ==============================================================================
+
+TOPOLOGY = {
+    "client_host": {
+        "hostname": "gros-114", "ip": "172.16.66.114"
+    },
+    "intermediate_vm": {
+        "vm_name": "my-vm", "ip": "10.144.40.1", "user": "root", "password": "grid5000"
+    },
+    "backend_server": {
+        "hostname": "gros-111", "ip": "172.16.66.111"
+    }
+}
+
+PAYLOADS = {
+    "image_1KB.jpg": 1.0,
+    "image_10KB.jpg": 10.0,
+    "image_100KB.jpg": 100.0,
+    "image_1000KB.jpg": 1024.0
+}
+
+FULL_PAYLOAD_POOL = {
+    "img_20k": 20.1, "img_50k": 50.3, "img_80k": 80.7, "img_120k": 120.2,
+    "img_150k": 150.9, "img_180k": 180.4, "img_220k": 220.6, "img_250k": 250.1,
+    "img_280k": 280.8, "img_320k": 320.3, "img_350k": 350.5, "img_380k": 380.9,
+    "img_420k": 420.2, "img_450k": 450.7, "img_480k": 480.1, "img_520k": 520.6,
+    "img_550k": 550.4, "img_580k": 580.8, "img_620k": 620.3, "img_650k": 650.9,
+}
 
 # Fiche technique statique de l'expérimentation
 NETWORK_CAPACITIES = {
@@ -319,7 +341,7 @@ def generate_comparison_table(df, output_csv_path=None):
     all_payloads = {**PAYLOADS, **FULL_PAYLOAD_POOL}
     # S'assurer que la colonne de taille est bien présente en cas de valeurs manquantes
     if 'image_size_kb' not in peak.columns or peak['image_size_kb'].isnull().any():
-        peak['image_size_kb'] = peak['image_name'].map(all_payloads)
+        peak['image_name'] = peak['image_name'].map(all_payloads)
 
     # Gérer le cas où une image du CSV n'est pas dans le pool (peu probable mais prudent)
     peak.dropna(subset=['image_size_kb'], inplace=True)

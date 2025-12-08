@@ -1,13 +1,14 @@
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-
-# Fichiers de sortie du benchmark
+# Fichiers de résultats générés
 *.csv
 *.md
 plots/
 latency_analysis/
+
+# Fichiers de log
 *.log
-*.hdr
+
+# Cache Python
+__pycache__/
+
+# Fichier de configuration utilisateur (ne jamais commiter)
+user_config.py

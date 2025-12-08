@@ -13,9 +13,15 @@ Le système est conçu pour être à la fois simple et puissant, reposant sur 4 
 
 ## Workflow en 3 Étapes Simples
 
-### Étape 1 : Configurer `user_config.py`
+### Étape 1 : Créer et Configurer votre `user_config.py`
 
-C'est la **seule chose à faire** avant de lancer une expérience. Ouvrez ce fichier et personnalisez les variables selon vos besoins.
+C'est la **seule chose à faire** avant de lancer une expérience.
+
+1.  **Copiez le fichier d'exemple :**
+    ```bash
+    cp user_config.py.example user_config.py
+    ```
+2.  **Modifiez `user_config.py`** avec vos informations personnelles (login Grid'5000, etc.). Ce fichier est ignoré par git pour protéger vos informations.
 
 ### Étape 2 : Lancer le Pipeline Complet
 

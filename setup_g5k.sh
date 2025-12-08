@@ -31,7 +31,6 @@ VM_DISK_SIZE=$(get_config_value "VM_DISK_SIZE")
 VM_RAM_MB=$(get_config_value "VM_RAM_MB")
 VM_VCPUS=$(get_config_value "VM_VCPUS")
 VM_BASE_IMAGE_PATH=$(get_config_value "VM_BASE_IMAGE_PATH")
-VM_MAC_ADDRESS=$(get_config_value "VM_MAC_ADDRESS")
 
 echo "Configuration chargée depuis $CONFIG_FILE."
 mkdir -p logs
@@ -82,7 +81,16 @@ done
 run_on $CLIENT_NODE "apt-get update && apt-get install -y sshpass build-essential"
 run_on $CLIENT_NODE "cd /root/$REMOTE_PROJECT_NAME/wrk2 && make"
 
-# --- 4.3 Création de la VM ---
+# --- 4.3 Réservation de l'adresse MAC sur le VM_HOST ---
+echo -e "\n--- Réservation de l'adresse MAC pour la VM sur $VM_HOST ---"
+VM_MAC_ADDRESS=$(run_on $VM_HOST "g5k-subnets -im" | awk '{print $2}')
+if [ -z "$VM_MAC_ADDRESS" ]; then
+    echo "ERREUR : Impossible de réserver une adresse MAC sur le nœud hôte."
+    exit 1
+fi
+echo "Adresse MAC réservée : $VM_MAC_ADDRESS"
+
+# --- 4.4 Création de la VM ---
 echo -e "\n--- Lancement du script de création de la VM sur l'hôte $VM_HOST ---"
 run_on $VM_HOST /bin/bash <<EOF
 set -e
@@ -112,10 +120,6 @@ users:
 ssh_pwauth: true
 chpasswd: { expire: False }
 password: grid5000
-runcmd:
-- sed -i 's/^#?PermitRootLogin .*/PermitRootLogin yes/' /etc/ssh/sshd_config
-- systemctl restart ssh
-- apt-get update && apt-get install -y sysstat openjdk-17-jre cloud-guest-utils lvm2
 write_files:
 - path: /opt/resize_disk.sh
   permissions: '0755'
@@ -132,6 +136,9 @@ write_files:
     rm /etc/systemd/system/resize-disk.service
     rm /opt/resize_disk.sh
 runcmd:
+- sed -i 's/^#?PermitRootLogin .*/PermitRootLogin yes/' /etc/ssh/sshd_config
+- systemctl restart ssh
+- apt-get update && apt-get install -y sysstat openjdk-17-jre cloud-guest-utils lvm2
 - |
   cat <<'EOT_INNER' > /etc/systemd/system/resize-disk.service
   [Unit]
