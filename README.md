@@ -70,3 +70,8 @@ To submit your task, create a pull request to this repository. You can find more
 ## Cheers 🍻 to our contributors
 
 ![Contributors](./CONTRIBUTORS.svg)
+
+---
+
+## 🛠️ Grid'5000 Optimization Guide
+For the manual benchmarking session, please refer to [G5K_BARE_METAL_TUNING.md](./G5K_BARE_METAL_TUNING.md) for commands and steps to maximize CPU utilization.
