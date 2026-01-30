@@ -57,8 +57,8 @@ sudo-g5k apt-get update && sudo-g5k apt-get install -y openjdk-17-jre sysstat li
 
 **Où :** Nœud Client.
 ```bash
-# Note : Commencez par -R 2000 puis augmentez (4000, 6000...)
-./wrk2/wrk -t8 -c100 -d60s -R4000 --latency "http://IP_INTERMEDIAIRE:8080/Serv?machine=IP_BACKEND&image=small.jpg"
+# Pour 4 cœurs, le débit doit être ÉLEVÉ (ex: commencez à 5000 et montez par paliers de 2000)
+./wrk2/wrk -t8 -c100 -d60s -R10000 --latency "http://IP_INTERMEDIAIRE:8080/Serv?machine=IP_BACKEND&image=small.jpg"
 ```
 
 ---
@@ -72,29 +72,28 @@ mpstat -P 0,1,2,3 1
 
 ---
 
-## DÉPANNAGE : Que faire si le CPU reste à ~97% d'idle ?
+## ANALYSE : Comment atteindre le 100% CPU ?
 
-Si vos résultats `mpstat` ressemblent à ceci (Idle > 90%) :
-```
-Average:  CPU    %usr   %sys   %soft   %idle
-Average:   0    1.52   0.81   0.52   97.15
-```
-**Ce n'est PAS normal.** Le serveur ne reçoit pas de charge. Voici comment corriger :
+Si vos résultats montrent un `%idle` supérieur à 5% (ex: 55% d'idle), cela signifie que le système n'est pas encore saturé.
 
-1.  **Vérifier la connectivité (depuis le Client) :**
-    ```bash
-    # Si le curl échoue ou renvoie une erreur 404/500, wrk n'enverra rien d'utile
-    curl -I "http://IP_INTERMEDIAIRE:8080/Serv?machine=IP_BACKEND&image=small.jpg"
-    ```
-2.  **Vérifier les Logs Tomcat (sur l'Intermédiaire) :**
-    ```bash
-    # Regardez si les requêtes arrivent en temps réel
-    tail -f ~/votre_projet/apache-tomcat-11.0.1/logs/localhost_access_log.*.txt
-    ```
-3.  **Vérifier la sortie de wrk (sur le Client) :**
-    *   Si `wrk` affiche **"Socket errors: connect 100..."**, c'est que l'intermédiaire n'accepte pas les connexions.
-    *   Si `wrk` affiche **"Requests/sec: 0.00"**, l'URL est probablement fausse.
-4.  **Augmenter le débit (-R) :**
-    Si tout fonctionne mais que le CPU reste bas, augmentez massivement le `-R` (ex: `-R 10000`).
-5.  **Vérifier l'IP de la machine backend :**
-    L'URL doit contenir l'IP réelle du backend (`machine=IP_BACKEND`). Si le backend est injoignable par l'intermédiaire, le proxy va attendre en vain (idle).
+### 1. Augmenter le débit (-R)
+C'est la cause n°1. Si vous avez 50% d'idle à `-R 4000`, passez directement à `-R 10000`. Continuez d'augmenter jusqu'à ce que l'idle tombe sous les 2-3%.
+
+### 2. Vérifier le Client (M1)
+Si vous augmentez `-R` mais que le CPU de l'Intermédiaire ne monte plus, vérifiez le Client :
+```bash
+# Sur le nœud Client (M1) pendant le test
+top
+```
+Si le processus `wrk` sur le client utilise 100% d'un cœur (ou plafonne), il ne peut plus envoyer assez de requêtes.
+**Solution :** Augmentez le nombre de threads (`-t16`) et de connexions (`-c200`) sur le client.
+
+### 3. Vérifier la Bande Passante (M2)
+Sur l'Intermédiaire, vérifiez si vous saturez le lien réseau (10 Gbps) :
+```bash
+sar -n DEV 1
+```
+Si `rxkB/s` + `txkB/s` atteint ~1 200 000 kB/s (1.2 GB/s), vous avez atteint la limite physique du réseau. Le CPU ne montera pas plus haut car la carte réseau ne peut plus débiter.
+
+### 4. Vérifier les erreurs Tomcat
+Si le CPU ne monte pas et que le réseau n'est pas saturé, vérifiez que Tomcat n'est pas limité par son nombre de threads internes (bien que 100 connexions wrk devraient suffire). Regardez les logs d'erreurs.
