@@ -15,9 +15,12 @@ sudo-g5k apt-get update && sudo-g5k apt-get install -y openjdk-17-jre sysstat li
 ## ÉTAPE 1 : Configuration du Serveur Backend (M3)
 
 **Où :** Nœud Backend.
-1.  **Démarrer Tomcat normalement :**
+1.  **Déployer et démarrer Tomcat :**
     ```bash
     cd ~/votre_projet
+    # On déploie dans le dossier webapps (contexte /serv)
+    rm -rf apache-tomcat-11.0.1/webapps/*
+    cp serv.war apache-tomcat-11.0.1/webapps/
     ./apache-tomcat-11.0.1/bin/startup.sh
     ```
 
@@ -33,13 +36,13 @@ sudo-g5k apt-get update && sudo-g5k apt-get install -y openjdk-17-jre sysstat li
     ```
 
 2.  **Gestion des Interruptions (Cœurs 0-3) :**
-    On force le traitement réseau sur les mêmes cœurs que l'application.
     ```bash
     sudo-g5k systemctl stop irqbalance 2>/dev/null || true
     INTERFACE=$(ip route get 8.8.8.8 | grep -oP 'dev \K\S+')
     IRQS=$(grep -E "$INTERFACE|mlx5_comp" /proc/interrupts | awk '{print $1}' | sed 's/://')
 
     for IRQ in $IRQS; do
+        # Masque 'f' = Cœurs 0, 1, 2, 3
         echo "f" | sudo-g5k tee /proc/irq/$IRQ/smp_affinity > /dev/null
     done
     ```
@@ -48,6 +51,9 @@ sudo-g5k apt-get update && sudo-g5k apt-get install -y openjdk-17-jre sysstat li
     ```bash
     ulimit -n 65535
     cd ~/votre_projet
+    rm -rf apache-tomcat-11.0.1/webapps/*
+    cp serv.war apache-tomcat-11.0.1/webapps/
+    # 'taskset -c 0-3' force le processus sur les 4 premiers cœurs
     taskset -c 0,1,2,3 ./apache-tomcat-11.0.1/bin/startup.sh
     ```
 
@@ -56,10 +62,15 @@ sudo-g5k apt-get update && sudo-g5k apt-get install -y openjdk-17-jre sysstat li
 ## ÉTAPE 3 : Benchmarking (M1)
 
 **Où :** Nœud Client.
+**Quand :** Une fois les serveurs démarrés.
+
+Utilisez des paramètres de haute concurrence pour saturer les cœurs.
 ```bash
-# Pour 4 cœurs, le débit doit être ÉLEVÉ (ex: commencez à 5000 et montez par paliers de 2000)
-./wrk2/wrk -t8 -c100 -d60s -R10000 --latency "http://IP_INTERMEDIAIRE:8080/Serv?machine=IP_BACKEND&image=small.jpg"
+# Exemple avec 32 threads, 500 connexions et 20 000 RPS
+./wrk2/wrk -t32 -c500 -d60s -R20000 --latency "http://IP_INTERMEDIAIRE:8080/serv/Serv?machine=NOM_BACKEND&image=image_1KB.jpg"
 ```
+*   **IP_INTERMEDIAIRE** : L'IP de votre nœud M2.
+*   **NOM_BACKEND** : Le nom d'hôte de votre nœud M3 (ex: dahu-11).
 
 ---
 
@@ -72,28 +83,16 @@ mpstat -P 0,1,2,3 1
 
 ---
 
-## ANALYSE : Comment atteindre le 100% CPU ?
+## ANALYSE : Que faire si le CPU ne monte pas à 100% ?
 
-Si vos résultats montrent un `%idle` supérieur à 5% (ex: 55% d'idle), cela signifie que le système n'est pas encore saturé.
+Si votre `%idle` reste élevé (ex: > 50%) avec `-R 20000` :
 
-### 1. Augmenter le débit (-R)
-C'est la cause n°1. Si vous avez 50% d'idle à `-R 4000`, passez directement à `-R 10000`. Continuez d'augmenter jusqu'à ce que l'idle tombe sous les 2-3%.
-
-### 2. Vérifier le Client (M1)
-Si vous augmentez `-R` mais que le CPU de l'Intermédiaire ne monte plus, vérifiez le Client :
-```bash
-# Sur le nœud Client (M1) pendant le test
-top
-```
-Si le processus `wrk` sur le client utilise 100% d'un cœur (ou plafonne), il ne peut plus envoyer assez de requêtes.
-**Solution :** Augmentez le nombre de threads (`-t16`) et de connexions (`-c200`) sur le client.
-
-### 3. Vérifier la Bande Passante (M2)
-Sur l'Intermédiaire, vérifiez si vous saturez le lien réseau (10 Gbps) :
-```bash
-sar -n DEV 1
-```
-Si `rxkB/s` + `txkB/s` atteint ~1 200 000 kB/s (1.2 GB/s), vous avez atteint la limite physique du réseau. Le CPU ne montera pas plus haut car la carte réseau ne peut plus débiter.
-
-### 4. Vérifier les erreurs Tomcat
-Si le CPU ne monte pas et que le réseau n'est pas saturé, vérifiez que Tomcat n'est pas limité par son nombre de threads internes (bien que 100 connexions wrk devraient suffire). Regardez les logs d'erreurs.
+1.  **Vérifier l'URL avec curl :**
+    ```bash
+    # Si vous obtenez une 404, wrk ne génère aucune charge réelle.
+    curl -I "http://IP_INTERMEDIAIRE:8080/serv/Serv?machine=NOM_BACKEND&image=image_1KB.jpg"
+    ```
+2.  **Vérifier la saturation du Client (M1) :**
+    Lancez `top` sur M1. Si le processus `wrk` consomme 100% de plusieurs cœurs, il se peut qu'il soit lui-même le bottleneck.
+3.  **Vérifier la Bande Passante :**
+    Lancez `sar -n DEV 1` sur M2. À 20 000 RPS avec 1KB, vous devriez voir au moins 20MB/s. Si vous testez avec de plus grosses images, vérifiez que vous ne saturez pas les 10Gbps (~1.2GB/s).
