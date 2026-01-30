@@ -1,97 +1,122 @@
-# Guide d'Optimisation de Performance sur Grid'5000 (Bare Metal)
+# Guide de Benchmark Manuel : Protocole de Saturation CPU sur Grid'5000
 
-Ce guide fournit les étapes et commandes nécessaires pour saturer le CPU (atteindre le "vrai" 100%) et optimiser la bande passante lors de tests de charge haute performance (RPS élevé) sur des nœuds Grid'5000.
-
-## 1. Pourquoi le CPU plafonne à 90% ? (Analyse Scientifique)
-
-Si vous observez un plateau à 90% malgré une charge croissante, cela est généralement dû à l'un des facteurs suivants :
-
-*   **Bottleneck SoftIRQ (Saturation d'un seul cœur)** : Les interruptions réseau sont souvent traitées par un seul cœur. Si ce cœur est à 100% en mode `%soft` (SoftIRQ), le système ne peut plus traiter de paquets supplémentaires, même si les autres cœurs sont libres. L'utilisation *moyenne* semble bloquée sous les 100%.
-*   **Gouverneur de Fréquence** : Par défaut, le CPU peut être en mode `powersave`. Il ne monte pas à sa fréquence Turbo maximale, ou il y a une latence dans l'ajustement.
-*   **Limites du Kernel** : Les files d'attente réseau (`backlog`) ou les buffers TCP sont saturés, forçant le CPU à passer son temps à rejeter des paquets (overhead invisible).
-*   **SMT (Hyper-threading)** : 90% sur des cœurs logiques peut signifier que les unités d'exécution physiques partagées sont déjà saturées.
+Ce document détaille le protocole exact, nœud par nœud et étape par étape, pour réussir à saturer le CPU (100%) lors de vos tests sur Grid'5000.
 
 ---
 
-## 2. Commandes d'Optimisation
+## 0. Préparation (Sur TOUS les nœuds : C, I, S)
 
-Exécutez ces commandes sur le nœud **Intermédiaire** (Proxy/Serveur sous test).
-
-### A. Forcer le mode Performance du CPU
-Élimine les baisses de fréquence et force le Turbo Boost.
+Avant de commencer, assurez-vous que les outils de base sont installés sur les trois nœuds.
 ```bash
-# Installer l'outil si nécessaire
-sudo-g5k apt-get update && sudo-g5k apt-get install -y linux-cpupower
-
-# Définir le gouverneur sur 'performance' pour TOUS les cœurs
-sudo-g5k cpupower frequency-set -g performance
+sudo-g5k apt-get update && sudo-g5k apt-get install -y openjdk-17-jre sysstat
 ```
 
-### B. Optimisation de la Pile Réseau (sysctl)
-Augmente les limites de réception et les buffers pour éviter les pertes de paquets silencieuses.
-```bash
-# Augmenter la file d'attente d'entrée (très important pour le haut RPS)
-sudo-g5k sysctl -w net.core.netdev_max_backlog=100000
+---
 
-# Augmenter les buffers TCP (16MB max)
-sudo-g5k sysctl -w net.core.rmem_max=16777216
-sudo-g5k sysctl -w net.core.wmem_max=16777216
-sudo-g5k sysctl -w net.ipv4.tcp_rmem="4096 87380 16777216"
-sudo-g5k sysctl -w net.ipv4.tcp_wmem="4096 65536 16777216"
+## ÉTAPE 1 : Configuration du Serveur Backend (M3)
 
-# Optimiser la réutilisation des sockets (évite l'épuisement des ports)
-sudo-g5k sysctl -w net.ipv4.tcp_tw_reuse=1
-sudo-g5k sysctl -w net.ipv4.ip_local_port_range="1024 65535"
-```
+Le backend doit être prêt à servir les images avant que le reste ne démarre.
 
-### C. Gestion de l'Affinité des Interruptions (IRQ Affinity)
-C'est l'étape la plus critique pour "dépasser" le plateau des 90%. Il faut forcer la carte réseau à distribuer ses interruptions sur plusieurs cœurs.
+**Quand :** À faire en premier.
+**Où :** Sur le nœud Backend.
 
-1.  Trouver l'interface réseau (ex: `eno1` ou `eth0`) : `ip link`
-2.  Identifier les IRQ associées :
+1.  **Préparer Tomcat :**
     ```bash
-    grep eno1 /proc/interrupts | awk '{print $1}' | sed 's/://'
+    # Déployer l'application standard
+    cd ~/votre_projet
+    rm -rf apache-tomcat-11.0.1/webapps/*
+    cp serv.war apache-tomcat-11.0.1/webapps/ROOT.war
     ```
-3.  Distribuer les IRQs (Exemple : si vous avez 4 IRQs et voulez utiliser les cœurs 0-3) :
+2.  **Démarrer Tomcat :**
     ```bash
-    # Note : Le masque 'f' (1111 en binaire) permet d'utiliser les 4 premiers cœurs.
-    # Remplacez $IRQ par les numéros trouvés à l'étape précédente.
+    ./apache-tomcat-11.0.1/bin/startup.sh
+    ```
+
+---
+
+## ÉTAPE 2 : Optimisation et Lancement de l'Intermédiaire (M2)
+
+C'est ici que les optimisations sont cruciales pour dépasser le plateau des 90%.
+
+**Quand :** Après le démarrage du Backend.
+**Où :** Sur le nœud Intermédiaire (Proxy).
+
+1.  **Optimisation du CPU (Gouverneur) :**
+    ```bash
+    sudo-g5k apt-get install -y linux-cpupower
+    sudo-g5k cpupower frequency-set -g performance
+    ```
+2.  **Tuning de la Pile Réseau (Kernel) :**
+    ```bash
+    sudo-g5k sysctl -w net.core.netdev_max_backlog=100000
+    sudo-g5k sysctl -w net.core.somaxconn=10000
+    sudo-g5k sysctl -w net.ipv4.ip_local_port_range="1024 65535"
+    ```
+3.  **Gestion des Interruptions (Affinité IRQ) :**
+    *C'est la commande magique pour débloquer le CPU.*
+    ```bash
+    # 1. Arrêter l'équilibreur automatique
+    sudo-g5k systemctl stop irqbalance
+
+    # 2. Identifier l'IRQ de votre carte réseau (ex: eno1)
+    # Cherchez le numéro à gauche de 'eno1' dans /proc/interrupts
+    grep eno1 /proc/interrupts | awk '{print $1}' | sed 's/://'
+
+    # 3. Forcer l'IRQ sur plusieurs cœurs (ex: masque 'f' pour les cœurs 0-3)
+    # Remplacez $IRQ par le numéro trouvé ci-dessus
     echo "f" | sudo-g5k tee /proc/irq/$IRQ/smp_affinity
     ```
-    *Note : Sur G5K, le script `irqbalance` est souvent actif. Il est préférable de l'arrêter pour un contrôle manuel scientifique.*
+4.  **Augmenter les limites système :**
     ```bash
-    sudo-g5k systemctl stop irqbalance
+    ulimit -n 65535
     ```
-
-### D. Augmenter les Limites de Fichiers (ulimit)
-Essentiel pour gérer des milliers de connexions simultanées avec `wrk`.
-```bash
-ulimit -n 65535
-```
+5.  **Démarrer l'application à tester :**
+    ```bash
+    # Déployer la version (Serv ou Serv-odb)
+    cd ~/votre_projet
+    rm -rf apache-tomcat-11.0.1/webapps/*
+    cp serv_a_tester.war apache-tomcat-11.0.1/webapps/ROOT.war
+    ./apache-tomcat-11.0.1/bin/startup.sh
+    ```
 
 ---
 
-## 3. Protocole de Vérification Scientifique
+## ÉTAPE 3 : Benchmarking depuis le Client (M1)
 
-Pendant que votre test `wrk` tourne, ouvrez une autre console sur le nœud intermédiaire :
+**Quand :** Une fois que le Backend et l'Intermédiaire sont prêts.
+**Où :** Sur le nœud Client.
 
-### Vérifier la saturation par cœur
-```bash
-mpstat -P ALL 1
-```
-*   **Si un cœur affiche `%soft` proche de 100%** : Vous avez un bottleneck d'interruptions réseau. Appliquez l'optimisation IRQ Affinity (Section 2.C).
-*   **Si `%idle` est proche de 0% sur tous les cœurs** : Félicitations, vous avez atteint la saturation CPU réelle.
+1.  **Compiler wrk2 (si ce n'est pas fait) :**
+    ```bash
+    cd ~/votre_projet/wrk2 && make
+    ```
+2.  **Lancer le test de charge :**
+    ```bash
+    # Remplacez IP_INTERMEDIAIRE et IP_BACKEND par les vraies IPs
+    ./wrk -t8 -c100 -d60s -R2000 --latency "http://IP_INTERMEDIAIRE:8080/Serv?machine=IP_BACKEND&image=small.jpg"
+    ```
 
-### Vérifier la bande passante réelle
-```bash
-sar -n DEV 1
-```
-*   Regardez `rxkB/s` et `txkB/s`. Comparez avec la capacité théorique de l'interface (10 Gbps = ~1250 MB/s).
+---
 
-### Vérifier les erreurs réseau (Paquets ignorés)
-```bash
-netstat -s | grep -i "dropped"
-# OU
-ethtool -S eno1 | grep "drop"
-```
-*   Si les compteurs augmentent, votre bottleneck est au niveau du kernel/driver (Section 2.B nécessaire).
+## ÉTAPE 4 : Monitoring (Pendant le test)
+
+Pendant que `wrk` tourne à l'Étape 3, exécutez ces commandes pour valider scientifiquement la saturation.
+
+**Où :** Sur le nœud **Intermédiaire (M2)**.
+
+1.  **Vérifier la saturation par cœur :**
+    ```bash
+    mpstat -P ALL 1
+    ```
+    *Regardez si `%soft` est distribué sur plusieurs cœurs ou si un seul cœur plafonne.*
+
+2.  **Surveiller le trafic réseau :**
+    ```bash
+    sar -n DEV 1
+    ```
+
+3.  **Vérifier la fréquence réelle du CPU :**
+    ```bash
+    watch -n 1 "grep MHz /proc/cpuinfo"
+    ```
+    *Vérifiez que tous les cœurs sont à leur fréquence maximale (Turbo).*
