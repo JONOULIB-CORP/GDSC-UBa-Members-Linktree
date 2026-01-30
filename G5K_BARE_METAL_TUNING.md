@@ -37,11 +37,9 @@ sudo-g5k apt-get update && sudo-g5k apt-get install -y openjdk-17-jre sysstat li
     ```bash
     sudo-g5k systemctl stop irqbalance 2>/dev/null || true
     INTERFACE=$(ip route get 8.8.8.8 | grep -oP 'dev \K\S+')
-    # Chercher les IRQs mlx5 (Dahu) ou par nom d'interface
     IRQS=$(grep -E "$INTERFACE|mlx5_comp" /proc/interrupts | awk '{print $1}' | sed 's/://')
 
     for IRQ in $IRQS; do
-        # Masque 'f' = 1111 en binaire = Cœurs 0, 1, 2, 3
         echo "f" | sudo-g5k tee /proc/irq/$IRQ/smp_affinity > /dev/null
     done
     ```
@@ -50,7 +48,6 @@ sudo-g5k apt-get update && sudo-g5k apt-get install -y openjdk-17-jre sysstat li
     ```bash
     ulimit -n 65535
     cd ~/votre_projet
-    # 'taskset -c 0-3' force le processus à n'utiliser que les 4 premiers cœurs
     taskset -c 0,1,2,3 ./apache-tomcat-11.0.1/bin/startup.sh
     ```
 
@@ -60,7 +57,7 @@ sudo-g5k apt-get update && sudo-g5k apt-get install -y openjdk-17-jre sysstat li
 
 **Où :** Nœud Client.
 ```bash
-# Augmentez -R (ex: 4000) pour saturer les 4 cœurs de l'intermédiaire
+# Note : Commencez par -R 2000 puis augmentez (4000, 6000...)
 ./wrk2/wrk -t8 -c100 -d60s -R4000 --latency "http://IP_INTERMEDIAIRE:8080/Serv?machine=IP_BACKEND&image=small.jpg"
 ```
 
@@ -68,22 +65,36 @@ sudo-g5k apt-get update && sudo-g5k apt-get install -y openjdk-17-jre sysstat li
 
 ## ÉTAPE 4 : Monitoring Précis (M2)
 
-Pendant le test, lancez cette commande sur l'intermédiaire pour voir la consommation des 4 cœurs en temps réel.
+Lancez cette commande sur l'intermédiaire **pendant** que le test tourne.
+```bash
+mpstat -P 0,1,2,3 1
+```
 
-1.  **Consommation en temps réel (par cœur) :**
+---
+
+## DÉPANNAGE : Que faire si le CPU reste à ~97% d'idle ?
+
+Si vos résultats `mpstat` ressemblent à ceci (Idle > 90%) :
+```
+Average:  CPU    %usr   %sys   %soft   %idle
+Average:   0    1.52   0.81   0.52   97.15
+```
+**Ce n'est PAS normal.** Le serveur ne reçoit pas de charge. Voici comment corriger :
+
+1.  **Vérifier la connectivité (depuis le Client) :**
     ```bash
-    # Monitorer uniquement les cœurs 0, 1, 2, 3 toutes les secondes
-    mpstat -P 0,1,2,3 1
+    # Si le curl échoue ou renvoie une erreur 404/500, wrk n'enverra rien d'utile
+    curl -I "http://IP_INTERMEDIAIRE:8080/Serv?machine=IP_BACKEND&image=small.jpg"
     ```
-
-2.  **Obtenir les moyennes à la fin :**
-    *   **Méthode A (Automatique) :** Laissez `mpstat` tourner pendant toute la durée du test. Quand vous l'arrêtez avec `Ctrl+C`, il affiche une ligne **"Average:"** pour chaque cœur.
-    *   **Méthode B (Capture) :** Pour capturer exactement la moyenne sur 60 secondes :
-        ```bash
-        mpstat -P 0,1,2,3 60 1
-        ```
-        Cette commande attendra 60 secondes et affichera directement la moyenne de consommation pour chaque cœur (0, 1, 2, 3) ainsi que la moyenne globale du système.
-
-**Analyse scientifique :**
-*   Si les 4 cœurs sont proches de 0% `%idle`, vous avez atteint la saturation réelle.
-*   Comparez `%usr` (temps CPU application) et `%soft` (temps CPU réseau/interruptions).
+2.  **Vérifier les Logs Tomcat (sur l'Intermédiaire) :**
+    ```bash
+    # Regardez si les requêtes arrivent en temps réel
+    tail -f ~/votre_projet/apache-tomcat-11.0.1/logs/localhost_access_log.*.txt
+    ```
+3.  **Vérifier la sortie de wrk (sur le Client) :**
+    *   Si `wrk` affiche **"Socket errors: connect 100..."**, c'est que l'intermédiaire n'accepte pas les connexions.
+    *   Si `wrk` affiche **"Requests/sec: 0.00"**, l'URL est probablement fausse.
+4.  **Augmenter le débit (-R) :**
+    Si tout fonctionne mais que le CPU reste bas, augmentez massivement le `-R` (ex: `-R 10000`).
+5.  **Vérifier l'IP de la machine backend :**
+    L'URL doit contenir l'IP réelle du backend (`machine=IP_BACKEND`). Si le backend est injoignable par l'intermédiaire, le proxy va attendre en vain (idle).
