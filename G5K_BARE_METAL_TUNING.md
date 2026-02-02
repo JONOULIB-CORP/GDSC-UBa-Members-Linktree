@@ -15,10 +15,9 @@ sudo-g5k apt-get update && sudo-g5k apt-get install -y openjdk-17-jre sysstat li
 ## ÉTAPE 1 : Configuration du Serveur Backend (M3)
 
 **Où :** Nœud Backend.
-1.  **Déployer et démarrer Tomcat :**
+1.  **Démarrer Tomcat normalement :**
     ```bash
     cd ~/votre_projet
-    # On déploie dans le dossier webapps (contexte /serv)
     rm -rf apache-tomcat-11.0.1/webapps/*
     cp serv.war apache-tomcat-11.0.1/webapps/
     ./apache-tomcat-11.0.1/bin/startup.sh
@@ -42,7 +41,6 @@ sudo-g5k apt-get update && sudo-g5k apt-get install -y openjdk-17-jre sysstat li
     IRQS=$(grep -E "$INTERFACE|mlx5_comp" /proc/interrupts | awk '{print $1}' | sed 's/://')
 
     for IRQ in $IRQS; do
-        # Masque 'f' = Cœurs 0, 1, 2, 3
         echo "f" | sudo-g5k tee /proc/irq/$IRQ/smp_affinity > /dev/null
     done
     ```
@@ -53,24 +51,29 @@ sudo-g5k apt-get update && sudo-g5k apt-get install -y openjdk-17-jre sysstat li
     cd ~/votre_projet
     rm -rf apache-tomcat-11.0.1/webapps/*
     cp serv.war apache-tomcat-11.0.1/webapps/
-    # 'taskset -c 0-3' force le processus sur les 4 premiers cœurs
     taskset -c 0,1,2,3 ./apache-tomcat-11.0.1/bin/startup.sh
     ```
 
 ---
 
-## ÉTAPE 3 : Benchmarking (M1)
+## ÉTAPE 3 : Benchmarking (M1) - La poussée finale vers 100%
+
+Vos derniers résultats montrent que vous êtes à **~84% de charge** (16% idle). Pour atteindre les 100%, vous devez augmenter la pression.
 
 **Où :** Nœud Client.
-**Quand :** Une fois les serveurs démarrés.
-
-Utilisez des paramètres de haute concurrence pour saturer les cœurs.
 ```bash
-# Exemple avec 32 threads, 500 connexions et 20 000 RPS
-./wrk2/wrk -t32 -c500 -d60s -R20000 --latency "http://IP_INTERMEDIAIRE:8080/serv/Serv?machine=NOM_BACKEND&image=image_1KB.jpg"
+# Augmentez le débit à 35 000 RPS et la concurrence à 1000 connexions / 64 threads
+./wrk2/wrk -t64 -c1000 -d60s -R35000 --latency "http://IP_INTERMEDIAIRE:8080/serv/Serv?machine=NOM_BACKEND&image=small.jpg"
 ```
-*   **IP_INTERMEDIAIRE** : L'IP de votre nœud M2.
-*   **NOM_BACKEND** : Le nom d'hôte de votre nœud M3 (ex: dahu-11).
+
+### Pourquoi le CPU pourrait bloquer avant 100% ?
+
+Si malgré l'augmentation de `-R`, le CPU reste bloqué à ~85-90% :
+
+1.  **Bottleneck du Client (M1) :** Vérifiez avec `top` sur le client. Si `wrk` sature ses propres cœurs, il ne pourra pas envoyer les 35k RPS demandés.
+2.  **Limite de Threads Tomcat (M2) :** Par défaut, Tomcat 11 limite le nombre de threads de traitement à **200**. Si vous avez 1000 connexions ouvertes, beaucoup attendent peut-être un thread libre.
+    *   *Observation scientifique* : Si l'idle reste stable malgré l'augmentation de `-R`, c'est que Tomcat a atteint son débit maximum de requêtes par seconde autorisé par son pool de threads.
+    *   *Solution* : Si vous voulez vraiment pousser le CPU à 100%, il faudra peut-être augmenter cette limite dans `conf/server.xml` (ex: `maxThreads="500"` dans le `<Connector ... />`).
 
 ---
 
@@ -80,19 +83,4 @@ Lancez cette commande sur l'intermédiaire **pendant** que le test tourne.
 ```bash
 mpstat -P 0,1,2,3 1
 ```
-
----
-
-## ANALYSE : Que faire si le CPU ne monte pas à 100% ?
-
-Si votre `%idle` reste élevé (ex: > 50%) avec `-R 20000` :
-
-1.  **Vérifier l'URL avec curl :**
-    ```bash
-    # Si vous obtenez une 404, wrk ne génère aucune charge réelle.
-    curl -I "http://IP_INTERMEDIAIRE:8080/serv/Serv?machine=NOM_BACKEND&image=image_1KB.jpg"
-    ```
-2.  **Vérifier la saturation du Client (M1) :**
-    Lancez `top` sur M1. Si le processus `wrk` consomme 100% de plusieurs cœurs, il se peut qu'il soit lui-même le bottleneck.
-3.  **Vérifier la Bande Passante :**
-    Lancez `sar -n DEV 1` sur M2. À 20 000 RPS avec 1KB, vous devriez voir au moins 20MB/s. Si vous testez avec de plus grosses images, vérifiez que vous ne saturez pas les 10Gbps (~1.2GB/s).
+*Vérifiez les moyennes à la fin (ligne Average). L'objectif est de voir `%idle` proche de 0.00.*
