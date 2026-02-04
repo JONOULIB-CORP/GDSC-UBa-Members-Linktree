@@ -42,23 +42,22 @@ sudo-g5k apt-get update && sudo-g5k apt-get install -y openjdk-17-jre sysstat li
     done
     ```
 
-3.  **DÉBLOQUER LE CPU : Tuning de Tomcat (100% Hardware)**
-    *Si vous avez 20% d'idle et 10s de latence, c'est que Tomcat sature logiciellement. Appliquez ceci :*
+3.  **ULTIME OPTIMISATION : Tomcat pour le 100% CPU**
+    *Si vous bloquez à 80% avec 15s de latence, c'est que Tomcat est étranglé par ses logs et sa gestion mémoire.*
 
-    *   **Augmenter les Threads** (Passez à 1000 pour gérer la charge massive) :
+    *   **Désactiver COMPLÈTEMENT les Logs** (Gain massif) :
+        ```bash
+        # Supprime la ligne de la Valve AccessLog du fichier server.xml
+        sed -i '/AccessLogValve/d' ~/mesures/apache-tomcat-11.0.1/conf/server.xml
+        ```
+    *   **Optimiser la JVM (GC G1 + 4GB)** :
+        ```bash
+        echo 'export CATALINA_OPTS="-Xms4G -Xmx4G -XX:+UseG1GC -XX:MaxGCPauseMillis=200"' > ~/mesures/apache-tomcat-11.0.1/bin/setenv.sh
+        chmod +x ~/mesures/apache-tomcat-11.0.1/bin/setenv.sh
+        ```
+    *   **Vérifier les Threads** (Doit être à 1000) :
         ```bash
         sed -i 's/maxThreads="[0-9]*"/maxThreads="1000"/' ~/mesures/apache-tomcat-11.0.1/conf/server.xml
-        ```
-    *   **Désactiver les Logs d'accès** (Gros gain CPU) :
-        ```bash
-        # Commentez la Valve AccessLog dans server.xml
-        sed -i 's/<Valve className="org.apache.catalina.valves.AccessLogValve"/<!-- <Valve className="org.apache.catalina.valves.AccessLogValve"/' ~/mesures/apache-tomcat-11.0.1/conf/server.xml
-        sed -i 's/pattern="%h %l %u %t \&quot;%r\&quot; %s %b" \/>/pattern="%h %l %u %t \&quot;%r\&quot; %s %b" \/> -->/' ~/mesures/apache-tomcat-11.0.1/conf/server.xml
-        ```
-    *   **Allouer plus de mémoire à la JVM** :
-        ```bash
-        echo 'export CATALINA_OPTS="-Xms2G -Xmx2G"' > ~/mesures/apache-tomcat-11.0.1/bin/setenv.sh
-        chmod +x ~/mesures/apache-tomcat-11.0.1/bin/setenv.sh
         ```
 
 4.  **Lancement bridé à 4 cœurs (0,1,2,3) :**
@@ -75,7 +74,8 @@ sudo-g5k apt-get update && sudo-g5k apt-get install -y openjdk-17-jre sysstat li
 **Où :** Nœud Client.
 
 ```bash
-# Recommandation : Gardez -c (connexions) inférieur ou égal à maxThreads
+# RÉDUISEZ -c pour diminuer la latence et augmenter le CPU effectif.
+# Si vous avez 1000 threads sur le serveur, testez avec 500 connexions.
 ./wrk2/wrk -t32 -c500 -d60s -R35000 --latency "http://IP_INTERMEDIAIRE:8080/serv/Serv?machine=NOM_BACKEND&image=image_1KB.jpg"
 ```
 
@@ -89,13 +89,10 @@ mpstat -P 0,1,2,3 1
 
 ---
 
-## ANALYSE : Pourquoi le CPU stagne à ~80% ?
+## ANALYSE : Pourquoi le CPU reste à ~75-80% ?
 
-Si vous voyez une latence élevée (ex: 10s) mais 20% d'idle :
+Si votre latence est > 10s, votre système est en **congestion**.
 
-1.  **Congestion Thread Pool** : Tomcat ne peut plus prendre de nouvelles requêtes. Il attend qu'un thread se libère. Le CPU ne travaille pas pendant cette attente.
-    *   *Solution* : Augmenter `maxThreads` à 1000.
-2.  **Overhead de Logging** : Écrire chaque ligne de log consomme du CPU inutilement à 20k RPS.
-    *   *Solution* : Désactiver les logs (Étape 2.3).
-3.  **Collapse Point** : Votre RPS observé (19k) est plus bas que votre test précédent (23k) ? Vous avez dépassé le point de rupture. Trop de connexions concurrentes (`-c1000`) tuent la performance par "Context Switching".
-    *   *Solution* : Réduisez `-c` à 500 et gardez `-R` à 30000.
+1.  **I/O Bottleneck** : Votre dernier test montrait que `AccessLogValve` était encore activé. Écrire des logs à 20 000 req/s sature le disque et bloque les threads Tomcat (ils attendent la fin de l'écriture).
+2.  **Context Switching** : Avec `-c1000` (1000 connexions simultanées), le noyau Linux passe trop de temps à jongler entre les connexions au lieu de laisser Tomcat travailler. Essayez `-c500`.
+3.  **GC Overhead** : Si la JVM n'a pas assez de mémoire ou un mauvais Garbage Collector, elle passe son temps à nettoyer la mémoire. Utilisez le GC G1 (Étape 2.3).
