@@ -20,12 +20,10 @@ sudo-g5k apt-get update && sudo-g5k apt-get install -y openjdk-17-jre sysstat li
     cd ~/mesures
     ./apache-tomcat-11.0.1/bin/startup.sh
     ```
-2.  **Surveiller le CPU du Backend :**
-    *Pendant le test, vérifiez si le backend est lui-même à 100%. S'il est saturé, l'intermédiaire ne pourra jamais atteindre 100% car il passera son temps à attendre le backend.*
 
 ---
 
-## ÉTAPE 2 : Limitation à 4 Cœurs et Tuning de l'Intermédiaire (M2)
+## ÉTAPE 2 : Optimisation de l'Intermédiaire (M2)
 
 **Où :** Nœud Intermédiaire.
 
@@ -44,12 +42,24 @@ sudo-g5k apt-get update && sudo-g5k apt-get install -y openjdk-17-jre sysstat li
     done
     ```
 
-3.  **DÉBLOQUER LE CPU : Augmenter les Threads Tomcat :**
-    *Par défaut, Tomcat limite à 200 threads. Si vous saturez ces 200 threads, le CPU s'arrêtera de monter même si vous augmentez -R.*
-    ```bash
-    # Augmenter à 500 threads dans server.xml
-    sed -i 's/<Connector port="8080"/<Connector port="8080" maxThreads="500"/' ~/mesures/apache-tomcat-11.0.1/conf/server.xml
-    ```
+3.  **DÉBLOQUER LE CPU : Tuning de Tomcat (100% Hardware)**
+    *Si vous avez 20% d'idle et 10s de latence, c'est que Tomcat sature logiciellement. Appliquez ceci :*
+
+    *   **Augmenter les Threads** (Passez à 1000 pour gérer la charge massive) :
+        ```bash
+        sed -i 's/maxThreads="[0-9]*"/maxThreads="1000"/' ~/mesures/apache-tomcat-11.0.1/conf/server.xml
+        ```
+    *   **Désactiver les Logs d'accès** (Gros gain CPU) :
+        ```bash
+        # Commentez la Valve AccessLog dans server.xml
+        sed -i 's/<Valve className="org.apache.catalina.valves.AccessLogValve"/<!-- <Valve className="org.apache.catalina.valves.AccessLogValve"/' ~/mesures/apache-tomcat-11.0.1/conf/server.xml
+        sed -i 's/pattern="%h %l %u %t \&quot;%r\&quot; %s %b" \/>/pattern="%h %l %u %t \&quot;%r\&quot; %s %b" \/> -->/' ~/mesures/apache-tomcat-11.0.1/conf/server.xml
+        ```
+    *   **Allouer plus de mémoire à la JVM** :
+        ```bash
+        echo 'export CATALINA_OPTS="-Xms2G -Xmx2G"' > ~/mesures/apache-tomcat-11.0.1/bin/setenv.sh
+        chmod +x ~/mesures/apache-tomcat-11.0.1/bin/setenv.sh
+        ```
 
 4.  **Lancement bridé à 4 cœurs (0,1,2,3) :**
     ```bash
@@ -65,8 +75,8 @@ sudo-g5k apt-get update && sudo-g5k apt-get install -y openjdk-17-jre sysstat li
 **Où :** Nœud Client.
 
 ```bash
-# Pour saturer 4 cœurs réels, essayez ces paramètres :
-./wrk2/wrk -t32 -c500 -d60s -R30000 --latency "http://IP_INTERMEDIAIRE:8080/serv/Serv?machine=NOM_BACKEND&image=image_1KB.jpg"
+# Recommandation : Gardez -c (connexions) inférieur ou égal à maxThreads
+./wrk2/wrk -t32 -c500 -d60s -R35000 --latency "http://IP_INTERMEDIAIRE:8080/serv/Serv?machine=NOM_BACKEND&image=image_1KB.jpg"
 ```
 
 ---
@@ -79,13 +89,13 @@ mpstat -P 0,1,2,3 1
 
 ---
 
-## ANALYSE : Pourquoi le CPU bloque à ~75-80% ?
+## ANALYSE : Pourquoi le CPU stagne à ~80% ?
 
-Si vous voyez une latence énorme (ex: 15s) mais que le CPU reste à 20% d'idle, vous avez un **bottleneck logiciel**.
+Si vous voyez une latence élevée (ex: 10s) mais 20% d'idle :
 
-1.  **Saturation des Threads (M2)** : Les threads Tomcat sont tous occupés. Les nouvelles requêtes attendent dans la file d'attente TCP et ne consomment pas de CPU.
-    *   **Action** : Augmentez `maxThreads` (voir Étape 2.3).
-2.  **Saturation du Backend (M3)** : Si le backend est à 100% CPU, l'intermédiaire attend les données. L'attente réseau n'utilise pas le CPU.
-    *   **Action** : Vérifiez `mpstat` sur M3. Si M3 est à 100%, l'intermédiaire ne montera pas plus haut.
-3.  **Trop de Connexions Concurrentes** : Avec `-c1000`, la gestion de la file d'attente devient très lourde.
-    *   **Action** : Testez avec `-c500` mais en gardant un `-R` élevé (ex: 35000).
+1.  **Congestion Thread Pool** : Tomcat ne peut plus prendre de nouvelles requêtes. Il attend qu'un thread se libère. Le CPU ne travaille pas pendant cette attente.
+    *   *Solution* : Augmenter `maxThreads` à 1000.
+2.  **Overhead de Logging** : Écrire chaque ligne de log consomme du CPU inutilement à 20k RPS.
+    *   *Solution* : Désactiver les logs (Étape 2.3).
+3.  **Collapse Point** : Votre RPS observé (19k) est plus bas que votre test précédent (23k) ? Vous avez dépassé le point de rupture. Trop de connexions concurrentes (`-c1000`) tuent la performance par "Context Switching".
+    *   *Solution* : Réduisez `-c` à 500 et gardez `-R` à 30000.
