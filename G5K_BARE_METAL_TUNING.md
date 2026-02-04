@@ -39,7 +39,6 @@ sudo-g5k apt-get update && sudo-g5k apt-get install -y openjdk-17-jre sysstat li
     IRQS=$(grep -E "$INTERFACE|mlx5_comp" /proc/interrupts | awk '{print $1}' | sed 's/://')
 
     for IRQ in $IRQS; do
-        # Masque 'f' = Cœurs 0, 1, 2, 3
         echo "f" | sudo-g5k tee /proc/irq/$IRQ/smp_affinity > /dev/null
     done
     ```
@@ -48,7 +47,6 @@ sudo-g5k apt-get update && sudo-g5k apt-get install -y openjdk-17-jre sysstat li
     ```bash
     ulimit -n 65535
     cd ~/mesures
-    # 'taskset -c 0-3' force le processus sur les 4 premiers cœurs
     taskset -c 0,1,2,3 ./apache-tomcat-11.0.1/bin/startup.sh
     ```
 
@@ -57,33 +55,43 @@ sudo-g5k apt-get update && sudo-g5k apt-get install -y openjdk-17-jre sysstat li
 ## ÉTAPE 3 : Benchmarking (M1)
 
 **Où :** Nœud Client.
-**Quand :** Une fois les serveurs démarrés.
-
 ```bash
-# Exemple de poussée vers la saturation (32 threads, 500 connexions, 25k+ RPS)
+# Exemple de poussée (32 threads, 500 connexions)
 ./wrk2/wrk -t32 -c500 -d60s -R25000 --latency "http://IP_INTERMEDIAIRE:8080/serv/Serv?machine=NOM_BACKEND&image=image_1KB.jpg"
 ```
-*   **IP_INTERMEDIAIRE** : L'IP de votre nœud M2.
-*   **NOM_BACKEND** : Le nom d'hôte de votre nœud M3 (ex: dahu-11).
 
 ---
 
 ## ÉTAPE 4 : Monitoring Précis (M2)
 
-Lancez cette commande sur l'intermédiaire **pendant** que le test tourne.
 ```bash
 mpstat -P 0,1,2,3 1
 ```
 
 ---
 
-## ANALYSE : Que faire si le CPU ne monte pas à 100% ?
+## DÉPANNAGE : Diagnostic des "Résultats Catastrophiques"
 
-Si votre `%idle` reste élevé (ex: > 15%) malgré un débit cible élevé :
+Si vos résultats montrent un RPS très bas (ex: 5000 au lieu de 25000) et un débit de transfert minuscule (ex: quelques KB/s), **le serveur renvoie probablement des erreurs.**
 
-1.  **Vérifier la saturation du Client (M1) :**
-    Lancez `top` sur M1. Si le processus `wrk` sature ses propres cœurs, il ne pourra pas envoyer le débit demandé. Augmentez le nombre de threads (`-t64`) et de connexions (`-c1000`).
-2.  **Limite de Threads Tomcat (M2) :**
-    Vérifiez si Tomcat atteint sa limite de threads internes (souvent 200 par défaut). Si l'utilisation CPU plafonne alors que le débit demandé augmente, c'est un signe de saturation logicielle des threads Tomcat.
-3.  **Vérifier la Bande Passante :**
-    Lancez `sar -n DEV 1` sur M2. Vérifiez que vous ne saturez pas les 10Gbps (~1.2GB/s).
+### 1. Vérifier la taille des réponses (Analyse Scientifique)
+Calculez la taille moyenne par requête : `Total Read / Total Requests`.
+*   **Si Moyenne < 100 octets** : Le serveur renvoie des erreurs HTTP (404, 500). Un fichier de 1KB devrait générer > 1000 octets par réponse.
+*   **Action** : Testez manuellement l'URL avec `curl -v "URL_DU_TEST"`. Si vous voyez `404 Not Found` ou `500 Internal Server Error`, corrigez le chemin de l'image ou le nom du backend.
+
+### 2. Vérifier les Logs d'erreurs (M2)
+Si le CPU travaille (ex: 60%) mais que le RPS est bas, le serveur perd du temps à gérer des exceptions Java.
+```bash
+# Regardez les erreurs en temps réel sur l'intermédiaire
+tail -f ~/mesures/apache-tomcat-11.0.1/logs/catalina.out
+```
+
+### 3. Surcharge et Timeouts
+Si `wrk` affiche beaucoup de **Socket errors (timeout)** :
+*   Le serveur est soit totalement saturé (vérifiez `mpstat`, si idle < 5%).
+*   Soit une file d'attente est pleine (vérifiez `net.core.somaxconn` et les threads Tomcat).
+*   Soit le réseau entre l'intermédiaire et le backend est coupé.
+
+### 4. Le Client (M1) est-il saturé ?
+Si `wrk` n'arrive pas à envoyer le débit demandé alors que le serveur est "Idle" :
+*   Vérifiez le CPU sur le nœud client. S'il est à 100%, augmentez le nombre de threads (`-t`) et de connexions (`-c`).
