@@ -1,6 +1,6 @@
 # Guide de Benchmark Manuel : Protocole de Saturation sur 4 Cœurs (G5K)
 
-Ce document détaille le protocole pour limiter l'exécution à **4 cœurs** sur l'intermédiaire et obtenir un monitoring précis (par cœur + moyennes).
+Ce document détaille le protocole pour limiter l'exécution à **4 cœurs** sur l'intermédiaire et le **brider** (throttle) pour atteindre artificiellement les 100% CPU.
 
 ---
 
@@ -23,13 +23,23 @@ sudo-g5k apt-get update && sudo-g5k apt-get install -y openjdk-17-jre sysstat li
 
 ---
 
-## ÉTAPE 2 : Optimisation de l'Intermédiaire (M2)
+## ÉTAPE 2 : Limitation et BRIDAGE de l'Intermédiaire (M2)
 
-**Où :** Nœud Intermédiaire.
+Si vos résultats montrent encore de l'idle (ex: 20%) malgré un gros débit, c'est que les CPU de Grid'5000 sont **trop performants** pour votre test. Il faut les brider.
 
-1.  **Optimisation CPU :**
+1.  **BRIDER LA FRÉQUENCE CPU (La clé du 100%) :**
+    Au lieu de chercher la performance maximale, on va forcer le CPU à sa fréquence minimale pour qu'il sature plus vite.
     ```bash
-    sudo-g5k cpupower frequency-set -g performance
+    # 1. Vérifier les fréquences disponibles
+    sudo-g5k cpupower frequency-info
+
+    # 2. Désactiver le Turbo Boost (Essentiel sur G5K)
+    echo 1 | sudo-g5k tee /sys/devices/system/cpu/intel_pstate/no_turbo
+
+    # 3. Forcer une fréquence basse (ex: 1.2 GHz ou le minimum affiché par frequency-info)
+    # On utilise le gouverneur 'userspace' pour fixer la fréquence
+    sudo-g5k cpupower frequency-set -g userspace
+    sudo-g5k cpupower frequency-set -f 1.2GHz
     ```
 
 2.  **Gestion des Interruptions (Cœurs 0-3) :**
@@ -42,23 +52,16 @@ sudo-g5k apt-get update && sudo-g5k apt-get install -y openjdk-17-jre sysstat li
     done
     ```
 
-3.  **ULTIME OPTIMISATION : Tomcat pour le 100% CPU**
-    *Si vous bloquez à 80% avec 15s de latence, c'est que Tomcat est étranglé par ses logs et sa gestion mémoire.*
-
-    *   **Désactiver COMPLÈTEMENT les Logs** (Gain massif) :
-        ```bash
-        # Supprime la ligne de la Valve AccessLog du fichier server.xml
-        sed -i '/AccessLogValve/d' ~/mesures/apache-tomcat-11.0.1/conf/server.xml
-        ```
-    *   **Optimiser la JVM (GC G1 + 4GB)** :
-        ```bash
-        echo 'export CATALINA_OPTS="-Xms4G -Xmx4G -XX:+UseG1GC -XX:MaxGCPauseMillis=200"' > ~/mesures/apache-tomcat-11.0.1/bin/setenv.sh
-        chmod +x ~/mesures/apache-tomcat-11.0.1/bin/setenv.sh
-        ```
-    *   **Vérifier les Threads** (Doit être à 1000) :
-        ```bash
-        sed -i 's/maxThreads="[0-9]*"/maxThreads="1000"/' ~/mesures/apache-tomcat-11.0.1/conf/server.xml
-        ```
+3.  **Tuning Tomcat (Threads et Mémoire) :**
+    ```bash
+    # Supprimer les logs pour éviter les bottlenecks disque
+    sed -i '/AccessLogValve/d' ~/mesures/apache-tomcat-11.0.1/conf/server.xml
+    # S'assurer d'avoir assez de threads
+    sed -i 's/maxThreads="[0-9]*"/maxThreads="1000"/' ~/mesures/apache-tomcat-11.0.1/conf/server.xml
+    # Optimiser la JVM
+    echo 'export CATALINA_OPTS="-Xms4G -Xmx4G -XX:+UseG1GC"' > ~/mesures/apache-tomcat-11.0.1/bin/setenv.sh
+    chmod +x ~/mesures/apache-tomcat-11.0.1/bin/setenv.sh
+    ```
 
 4.  **Lancement bridé à 4 cœurs (0,1,2,3) :**
     ```bash
@@ -72,11 +75,9 @@ sudo-g5k apt-get update && sudo-g5k apt-get install -y openjdk-17-jre sysstat li
 ## ÉTAPE 3 : Benchmarking (M1)
 
 **Où :** Nœud Client.
-
 ```bash
-# RÉDUISEZ -c pour diminuer la latence et augmenter le CPU effectif.
-# Si vous avez 1000 threads sur le serveur, testez avec 500 connexions.
-./wrk2/wrk -t32 -c500 -d60s -R35000 --latency "http://IP_INTERMEDIAIRE:8080/serv/Serv?machine=NOM_BACKEND&image=image_1KB.jpg"
+# Avec un CPU bridé à 1.2GHz, 20k-30k RPS devraient suffire à atteindre 100% CPU
+./wrk2/wrk -t32 -c500 -d60s -R30000 --latency "http://IP_INTERMEDIAIRE:8080/serv/Serv?machine=NOM_BACKEND&image=image_1KB.jpg"
 ```
 
 ---
@@ -89,10 +90,11 @@ mpstat -P 0,1,2,3 1
 
 ---
 
-## ANALYSE : Pourquoi le CPU reste à ~75-80% ?
+## ANALYSE : Pourquoi brider le CPU ?
 
-Si votre latence est > 10s, votre système est en **congestion**.
+Si vous avez 20% d'idle avec un CPU à 2.1GHz (Turbo à 3.7GHz), cela signifie que le CPU finit son travail trop vite.
 
-1.  **I/O Bottleneck** : Votre dernier test montrait que `AccessLogValve` était encore activé. Écrire des logs à 20 000 req/s sature le disque et bloque les threads Tomcat (ils attendent la fin de l'écriture).
-2.  **Context Switching** : Avec `-c1000` (1000 connexions simultanées), le noyau Linux passe trop de temps à jongler entre les connexions au lieu de laisser Tomcat travailler. Essayez `-c500`.
-3.  **GC Overhead** : Si la JVM n'a pas assez de mémoire ou un mauvais Garbage Collector, elle passe son temps à nettoyer la mémoire. Utilisez le GC G1 (Étape 2.3).
+En abaissant la fréquence à **1.2GHz** :
+1.  Chaque requête prend plus de temps CPU.
+2.  Le CPU n'a plus le temps de "se reposer" (idle) entre deux requêtes.
+3.  Vous atteindrez les **0.00% idle** (saturation réelle) beaucoup plus facilement, simulant ainsi une machine moins puissante.
