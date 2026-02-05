@@ -1,6 +1,6 @@
 # Guide de Benchmark Manuel : Protocole de Saturation sur 4 Cœurs (G5K)
 
-Ce document détaille le protocole pour limiter l'exécution à **4 cœurs** sur l'intermédiaire et le **brider** (throttle) pour atteindre artificiellement les 100% CPU.
+Ce document détaille le protocole pour limiter l'exécution à **4 cœurs** sur l'intermédiaire et le **brider** (throttle) pour atteindre les 100% CPU, même sur du matériel très puissant.
 
 ---
 
@@ -25,21 +25,22 @@ sudo-g5k apt-get update && sudo-g5k apt-get install -y openjdk-17-jre sysstat li
 
 ## ÉTAPE 2 : Limitation et BRIDAGE de l'Intermédiaire (M2)
 
-Si vos résultats montrent encore de l'idle (ex: 20%) malgré un gros débit, c'est que les CPU de Grid'5000 sont **trop performants** pour votre test. Il faut les brider.
+Si vos résultats montrent encore de l'idle (ex: 20%) malgré un gros débit, c'est que les CPU de Grid'5000 sont **trop performants**. Il faut les brider.
 
-1.  **BRIDER LA FRÉQUENCE CPU (La clé du 100%) :**
-    Au lieu de chercher la performance maximale, on va forcer le CPU à sa fréquence minimale pour qu'il sature plus vite.
+1.  **BRIDER LA FRÉQUENCE CPU (Version Robuste) :**
+    Certains nœuds G5K utilisent le driver `intel_pstate` qui n'autorise pas le gouverneur `userspace`. Voici la méthode qui marche partout :
+
     ```bash
-    # 1. Vérifier les fréquences disponibles
-    sudo-g5k cpupower frequency-info
-
-    # 2. Désactiver le Turbo Boost (Essentiel sur G5K)
+    # 1. Désactiver le Turbo Boost (Crucial)
     echo 1 | sudo-g5k tee /sys/devices/system/cpu/intel_pstate/no_turbo
 
-    # 3. Forcer une fréquence basse (ex: 1.2 GHz ou le minimum affiché par frequency-info)
-    # On utilise le gouverneur 'userspace' pour fixer la fréquence
-    sudo-g5k cpupower frequency-set -g userspace
-    sudo-g5k cpupower frequency-set -f 1.2GHz
+    # 2. Forcer le CPU à rester à 1.2GHz
+    # On définit la fréquence min (-d) et max (-u) sur la même valeur basse
+    sudo-g5k cpupower frequency-set -d 1.2GHz -u 1.2GHz -g performance
+
+    # 3. VÉRIFIER que la fréquence a bien changé
+    # Les valeurs MHz doivent être proches de 1200
+    watch -n 1 "grep MHz /proc/cpuinfo"
     ```
 
 2.  **Gestion des Interruptions (Cœurs 0-3) :**
@@ -48,6 +49,7 @@ Si vos résultats montrent encore de l'idle (ex: 20%) malgré un gros débit, c'
     INTERFACE=$(ip route get 8.8.8.8 | grep -oP 'dev \K\S+')
     IRQS=$(grep -E "$INTERFACE|mlx5_comp" /proc/interrupts | awk '{print $1}' | sed 's/://')
     for IRQ in $IRQS; do
+        # Masque 'f' = Cœurs 0, 1, 2, 3
         echo "f" | sudo-g5k tee /proc/irq/$IRQ/smp_affinity > /dev/null
     done
     ```
@@ -76,7 +78,7 @@ Si vos résultats montrent encore de l'idle (ex: 20%) malgré un gros débit, c'
 
 **Où :** Nœud Client.
 ```bash
-# Avec un CPU bridé à 1.2GHz, 20k-30k RPS devraient suffire à atteindre 100% CPU
+# Avec un CPU bridé à 1.2GHz, 25k-30k RPS devraient saturer le CPU.
 ./wrk2/wrk -t32 -c500 -d60s -R30000 --latency "http://IP_INTERMEDIAIRE:8080/serv/Serv?machine=NOM_BACKEND&image=image_1KB.jpg"
 ```
 
@@ -92,9 +94,9 @@ mpstat -P 0,1,2,3 1
 
 ## ANALYSE : Pourquoi brider le CPU ?
 
-Si vous avez 20% d'idle avec un CPU à 2.1GHz (Turbo à 3.7GHz), cela signifie que le CPU finit son travail trop vite.
+Si vous avez de l'idle à haute fréquence, c'est que le CPU traite les requêtes trop vite et "se repose" entre chaque.
 
 En abaissant la fréquence à **1.2GHz** :
-1.  Chaque requête prend plus de temps CPU.
-2.  Le CPU n'a plus le temps de "se reposer" (idle) entre deux requêtes.
-3.  Vous atteindrez les **0.00% idle** (saturation réelle) beaucoup plus facilement, simulant ainsi une machine moins puissante.
+1.  Chaque requête prend plus de temps CPU pour être traitée.
+2.  L'accumulation de ces requêtes finit par remplir les cycles CPU, faisant tomber l'idle à **0.00%**.
+3.  Cela permet d'observer la saturation réelle et les effets de la congestion sans avoir besoin d'un débit de requêtes infini.
