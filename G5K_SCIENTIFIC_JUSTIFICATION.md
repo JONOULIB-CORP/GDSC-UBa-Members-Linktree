@@ -1,66 +1,45 @@
-# Justification Scientifique de la Limite de Performance sur Grid'5000
+# Justification Scientifique : Pourquoi le CPU plafonne malgré le RPSmax
 
-Ce document explique pourquoi le RPS plafonne (RPSmax) sans pour autant saturer le CPU (100%) ou la Bande Passante (10Gbps).
-
----
-
-## 1. La Loi de Little : La Preuve Mathématique
-
-La limite de votre système n'est pas une limite de **ressource brute** (CPU), mais une limite de **concurrence**.
-
-**Loi de Little :**  $$L = \lambda \times W$$
-*   **L** (Concurrency) : Nombre de requêtes en cours dans le système (équivalent au nombre de threads Tomcat actifs).
-*   **$\lambda$** (Throughput) : Le débit de requêtes par seconde (RPS).
-*   **W** (Latency) : Le temps de réponse moyen (Latence).
-
-### Pourquoi le CPU reste en "Idle" ?
-Si votre latence (**W**) augmente (ex: 15 secondes) alors que votre nombre de threads (**L**) est fixe (ex: 500 threads) :
-$$\lambda = L / W = 500 / 15 = 33 \text{ requêtes/sec par lot}$$
-
-À ce stade, vos threads passent **99% de leur temps à attendre** et seulement **1% à travailler**.
-*   Pendant l'attente (Waiting/Stalled), le CPU ne fait rien : il est en **IDLE**.
-*   Le RPSmax est atteint car tous les threads sont occupés à attendre. Le système ne peut plus accepter de nouvelles requêtes, même s'il reste du CPU disponible.
+Ce document explique scientifiquement pourquoi, sur Grid'5000, le système peut atteindre sa limite de débit (RPSmax) tout en gardant une utilisation CPU faible (ex: 20% d'idle) et une latence énorme (ex: 15s).
 
 ---
 
-## 2. Les 3 Goulots d'Étranglement "Invisibles"
+## 1. Le Goulot d'Étranglement du Noyau (Listen Queue)
 
-### A. La Dépendance au Backend (M3)
-L'Intermédiaire (M2) est un proxy. Il ne peut pas finir de traiter la requête tant que le Backend (M3) n'a pas renvoyé les données.
-*   Si le réseau M2-M3 est lent ou si le Backend prend du temps à répondre, le thread sur M2 est **bloqué**.
-*   **Preuve scientifique** : Si vous saturez M3, M2 restera toujours en idle.
+Si vous avez augmenté le thread pool de Tomcat (ex: 1000 threads) mais que rien n'a changé, c'est que les requêtes sont bloquées **AVANT** d'arriver à Tomcat.
 
-### B. Le "Context Switching" (Surcharge du Noyau)
-À très haut RPS ou très haute concurrence (`-c 1000`), le noyau Linux passe son temps à décider quel thread doit tourner.
-*   Ce temps est visible dans `%sys` (système) et non dans `%usr` (utilisateur).
-*   Si `%sys` est élevé mais que le CPU n'atteint pas 100%, c'est que les threads se battent pour les mêmes ressources (locks), créant des micro-pauses de CPU.
+### Le mécanisme Linux :
+1.  **SYN Backlog** : La requête arrive sur la carte réseau.
+2.  **Listen Queue (somaxconn)** : Une fois la connexion TCP établie, elle attend dans une file gérée par le noyau Linux d'être récupérée par l'application (Tomcat).
+3.  **Application (Tomcat)** : L'Acceptor de Tomcat tire une connexion de la queue et la donne à un thread de travail.
 
-### C. La Limite de la File d'Attente (TCP Backlog)
-Si le débit de requêtes arrivant du Client est plus rapide que la capacité de Tomcat à les "sortir" de la file d'attente système, le noyau rejette les paquets.
-*   Le CPU de M2 ne monte pas car le travail n'arrive même pas jusqu'à l'application Tomcat.
-
----
-
-## 3. Comment "Prouver" cet état d'attente ?
-
-Sur l'Intermédiaire (M2), pendant que le test tourne avec une latence élevée :
-
-### 1. Voir l'état des threads Tomcat
-```bash
-# Identifier le PID de Tomcat
-PID=$(jcmd | grep Bootstrap | awk '{print $1}')
-# Voir ce que font les threads
-jstack $PID | grep "java.lang.Thread.State" | sort | uniq -c
-```
-*   **Résultat attendu** : Vous verrez des centaines de threads en état `TIMED_WAITING` ou `BLOCKED`. Cela prouve que le goulot est logiciel (attente) et non matériel.
-
-### 2. Voir les files d'attente réseau
-```bash
-netstat -st | grep -i "overflowed"
-```
-*   Si les compteurs augmentent, les requêtes sont jetées à la porte du serveur, expliquant pourquoi le CPU ne travaille pas.
+### La Preuve du Problème sur G5K :
+Par défaut sur Grid'5000 (Debian/Ubuntu), `net.core.somaxconn` est réglé sur **128**.
+*   Si vous lancez `wrk` avec **-c 1000**, le noyau ne peut mettre que 128 connexions dans la file d'attente.
+*   Les 872 autres connexions sont soit rejetées, soit attendent dans un état instable.
+*   **Résultat** : La latence explose car les requêtes font la queue dans le noyau Linux. Mais le CPU de Tomcat reste faible car il ne "voit" que 128 connexions à la fois, au lieu des 1000 threads disponibles.
 
 ---
 
-## Conclusion pour votre Rapport
-"Le RPSmax observé sur Grid'5000 n'est pas limité par la puissance de calcul brute (CPU) mais par la **capacité de parallélisme synchrone**. En raison de la latence induite par le backend et le réseau, le pool de threads Tomcat est saturé par des requêtes en attente d'E/S (I/O Wait). Conformément à la Loi de Little, le débit est bridé par le ratio Concurrence/Latence bien avant l'épuisement des cycles CPU."
+## 2. Loi de Little et "Stalled States"
+
+Même avec un noyau débloqué, si la latence (**W**) reste élevée à cause du réseau ou du backend, le débit (**$\lambda$**) est limité par :
+$$\lambda = L / W$$
+Où **L** est votre nombre de threads.
+*   Si **W** = 15s et **L** = 1000, alors **$\lambda$** = 66 requêtes/sec.
+*   Les threads passent 14.9s à attendre et 0.1s à travailler. Le CPU ne peut pas monter à 100% car il n'a rien à faire pendant 99% du temps (I/O Wait).
+
+---
+
+## 3. Pourquoi ça marche "ailleurs" ?
+
+Les environnements optimisés pour la performance (Cloud, serveurs d'entreprise) ont souvent des paramètres noyau beaucoup plus élevés par défaut :
+*   `net.core.somaxconn` peut être à 1024 ou 4096.
+*   `net.core.netdev_max_backlog` peut être à 5000+.
+
+Sur Grid'5000, vous êtes sur du **Bare Metal "brut"**. C'est à vous d'ouvrir les vannes du noyau pour permettre au flux d'atteindre votre application.
+
+---
+
+## Conclusion Scientifique
+"L'impossibilité d'atteindre 100% de CPU malgré un pool de threads Tomcat élevé est la signature d'un **goulot d'étranglement en amont de l'application**. La file d'attente système (`somaxconn`) agit comme un goulot de bouteille, limitant artificiellement le nombre de requêtes visibles par Tomcat. Les requêtes s'accumulent dans le noyau, créant une latence massive, tandis que les threads Tomcat restent sous-alimentés, laissant le CPU en état de repos relatif."
