@@ -1,6 +1,6 @@
 # Guide de Benchmark Manuel : Protocole de Saturation sur 4 Cœurs (G5K)
 
-Ce document détaille le protocole pour limiter l'exécution à **4 cœurs** sur l'intermédiaire et atteindre les 100% CPU réels.
+Ce document détaille le protocole pour limiter l'exécution à **4 cœurs** sur l'intermédiaire et le **brider** pour atteindre les 100% CPU réels.
 
 ---
 
@@ -15,82 +15,50 @@ sudo-g5k apt-get update && sudo-g5k apt-get install -y openjdk-17-jre sysstat li
 ## ÉTAPE 1 : Configuration du Serveur Backend (M3)
 
 **Où :** Nœud Backend.
-1.  **Démarrer Tomcat :**
-    ```bash
-    cd ~/mesures
-    ./apache-tomcat-11.0.1/bin/startup.sh
-    ```
+1.  **Démarrer Tomcat.**
+2.  **URGENT : Vérifiez le CPU du Backend (M3) avec `mpstat` !**
+    *   *Observation* : Pour une image de 1000KB (1MB), le backend doit envoyer énormément de données. S'il sature (100% CPU), l'intermédiaire (M2) sera bloqué et restera en idle (30%+) car il attend que les paquets arrivent.
 
 ---
 
 ## ÉTAPE 2 : Limitation et BRIDAGE de l'Intermédiaire (M2)
 
-### 1. Brider la fréquence au MINIMUM (Saturation Facile)
-Si vous voulez voir 100% de CPU, il faut rendre le processeur plus lent.
+### 1. Brider la fréquence au MINIMUM
 ```bash
-# 1. Désactiver le Turbo Boost
 echo 1 | sudo-g5k tee /sys/devices/system/cpu/intel_pstate/no_turbo
-
-# 2. Forcer 800MHz
 sudo-g5k cpupower frequency-set -d 800MHz -u 800MHz -g performance
-
-# 3. Vérifier
-watch -n 1 "grep MHz /proc/cpuinfo"
 ```
 
-### 2. Gestion des Interruptions (Cœurs 0-3)
-```bash
-sudo-g5k systemctl stop irqbalance 2>/dev/null || true
-INTERFACE=$(ip route get 8.8.8.8 | grep -oP 'dev \K\S+')
-IRQS=$(grep -E "$INTERFACE|mlx5_comp" /proc/interrupts | awk '{print $1}' | sed 's/://')
-for IRQ in $IRQS; do
-    echo "f" | sudo-g5k tee /proc/irq/$IRQ/smp_affinity > /dev/null
-done
-```
+### 2. Tuning Tomcat pour les Grosses Images (1MB)
+Quand la taille de l'image augmente, le coût CPU change : ce n'est plus la gestion de la requête qui coûte cher, mais la **gestion des buffers** (mémoire et réseau).
 
-### 3. Tuning Tomcat
-```bash
-# Désactiver les logs
-sed -i '/AccessLogValve/d' ~/mesures/apache-tomcat-11.0.1/conf/server.xml
-# Threads à 1000
-sed -i 's/maxThreads="[0-9]*"/maxThreads="1000"/' ~/mesures/apache-tomcat-11.0.1/conf/server.xml
-# JVM Optimisée
-echo 'export CATALINA_OPTS="-Xms4G -Xmx4G -XX:+UseG1GC"' > ~/mesures/apache-tomcat-11.0.1/bin/setenv.sh
-chmod +x ~/mesures/apache-tomcat-11.0.1/bin/setenv.sh
-```
-
-### 4. Lancement bridé à 4 cœurs
-```bash
-ulimit -n 65535
-cd ~/mesures
-taskset -c 0,1,2,3 ./apache-tomcat-11.0.1/bin/startup.sh
-```
+*   **Désactiver les logs** (Essentiel) : `sed -i '/AccessLogValve/d' ~/mesures/apache-tomcat-11.0.1/conf/server.xml`
+*   **Augmenter les Buffers Réseau** :
+    Pour 1MB, les buffers par défaut sont trop petits. Tomcat passe son temps à faire des petits read/write.
+    ```bash
+    # Modifier le Connecteur dans server.xml pour ajouter des buffers plus gros
+    sed -i 's/<Connector port="8080"/<Connector port="8080" socket.appReadBufSize="65536" socket.appWriteBufSize="65536" bufferSize="16384"/' ~/mesures/apache-tomcat-11.0.1/conf/server.xml
+    ```
 
 ---
 
 ## ÉTAPE 3 : Benchmarking (M1)
 
 **Où :** Nœud Client.
-
-### Loi de Performance : Fréquence vs Débit (RPS)
-Il y a un compromis mathématique entre la fréquence du CPU et le débit (RPS) :
-*   **Fréquence Haute (Turbo)** : RPS maximal (~30k+), mais saturation CPU difficile à atteindre (car le CPU est trop rapide).
-*   **Fréquence Basse (800MHz)** : RPS réduit (~10k), mais **Saturation CPU Facile (100%)**.
-
 ```bash
-# Pour un CPU bridé à 800MHz, testez avec -c 200 et un -R entre 10 000 et 15 000.
-./wrk2/wrk -t32 -c200 -d60s -R15000 --latency "http://IP_INTERMEDIAIRE:8080/serv/Serv?machine=NOM_BACKEND&image=small.jpg"
+# Avec 1MB, le RPS sera forcément bas (~500 à 1000). Ne mettez pas un -R trop haut (tentez -R 1000).
+./wrk2/wrk -t32 -c200 -d60s -R1000 --latency "http://IP_INTERMEDIAIRE:8080/serv/Serv?machine=NOM_BACKEND&image=image_1000KB.jpg"
 ```
 
 ---
 
-## ANALYSE : Interprétation des Résultats
+## ANALYSE : Pourquoi le RPS plafonne avec 1MB sans saturer le CPU/Réseau ?
 
-| Métrique | État : Saturation Saine | État : Effondrement (Collapse) |
-| :--- | :--- | :--- |
-| **CPU Idle** | Entre 0% et 2% | **0.00% constant** |
-| **Latence** | Faible (< 500ms) | **Énorme (> 10s)** |
-| **RPS Observé** | Égal au RPS cible (-R) | **Très inférieur au cible** |
+Si vous avez 30% d'idle et seulement 486MB/s de débit (~4Gbps) :
 
-**Conclusion de vos derniers tests :**
-En passant de 2.1GHz à 800MHz, vous êtes passé de 15% d'idle à **7% d'idle**. C'est une réussite. Pour atteindre les 0% d'idle, augmentez légèrement `-R` ou réduisez encore un peu plus `-c`.
+1.  **Le Goulot est au Backend (M3)** : C'est l'explication la plus probable. Pour envoyer 500 images de 1MB par seconde, le Backend doit travailler dur. Si le Backend n'est pas optimisé (CPU 100%, ou buffers trop petits), l'Intermédiaire **attend** les données. Le CPU de l'intermédiaire reste donc en idle.
+    *   **Test** : Lancez `mpstat` sur M3. Si M3 est à 100% ou saturé sur un cœur, il bride tout le test.
+2.  **Séquentialité du Proxy** : L'intermédiaire doit lire 1MB avant de le renvoyer. Ce temps de lecture (latency=359ms) multiplié par le nombre de connexions limite mathématiquement le RPS, même si le CPU est libre.
+    *   **Solution** : Augmentez massivement le nombre de threads Tomcat sur M2 (`maxThreads="2000"`) pour compenser la latence de lecture par plus de parallélisme.
+3.  **Window TCP** : Le lien entre M2 et M3 est peut-être limité par la fenêtre TCP.
+    *   **Action** : `sudo-g5k sysctl -w net.ipv4.tcp_window_scaling=1` (déjà activé par défaut sur G5K, mais à vérifier).
