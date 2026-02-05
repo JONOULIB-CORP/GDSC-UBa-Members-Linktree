@@ -25,21 +25,38 @@ sudo-g5k apt-get update && sudo-g5k apt-get install -y openjdk-17-jre sysstat li
 
 ## ÉTAPE 2 : Limitation et BRIDAGE de l'Intermédiaire (M2)
 
-### 1. Brider la fréquence au MINIMUM
+### 1. Brider la fréquence au MINIMUM (La clé du 100% CPU)
 ```bash
+# 1. Désactiver le Turbo Boost
 echo 1 | sudo-g5k tee /sys/devices/system/cpu/intel_pstate/no_turbo
+
+# 2. Forcer 800MHz (ou le minimum de 'cpupower frequency-info')
 sudo-g5k cpupower frequency-set -d 800MHz -u 800MHz -g performance
+
+# 3. Vérifier que MHz est proche de 800
+watch -n 1 "grep MHz /proc/cpuinfo"
 ```
 
-### 2. Tuning Tomcat
-*   **Logs et Threads** : Désactiver les logs et passer à 1000 threads.
-*   **Buffers pour grosses images** :
+### 2. Gestion des Interruptions (Cœurs 0-3)
+```bash
+sudo-g5k systemctl stop irqbalance 2>/dev/null || true
+INTERFACE=$(ip route get 8.8.8.8 | grep -oP 'dev \K\S+')
+IRQS=$(grep -E "$INTERFACE|mlx5_comp" /proc/interrupts | awk '{print $1}' | sed 's/://')
+for IRQ in $IRQS; do
+    echo "f" | sudo-g5k tee /proc/irq/$IRQ/smp_affinity > /dev/null
+done
+```
+
+### 3. Tuning Tomcat pour le Maximum de Performance
+*   **Threads** : Éditez `conf/server.xml` et réglez `maxThreads="1000"` dans le Connector 8080.
+*   **Logs** : **Supprimez ou commentez la balise `<Valve ... AccessLogValve ... />`**. Si vous la laissez, le disque va ralentir tout le système à 20k RPS.
+*   **Mémoire (JVM)** :
     ```bash
-    sed -i 's/<Connector port="8080"/<Connector port="8080" socket.appReadBufSize="65536" socket.appWriteBufSize="65536" bufferSize="16384" maxThreads="1000"/' ~/mesures/apache-tomcat-11.0.1/conf/server.xml
-    sed -i '/AccessLogValve/d' ~/mesures/apache-tomcat-11.0.1/conf/server.xml
+    echo 'export CATALINA_OPTS="-Xms4G -Xmx4G -XX:+UseG1GC"' > ~/mesures/apache-tomcat-11.0.1/bin/setenv.sh
+    chmod +x ~/mesures/apache-tomcat-11.0.1/bin/setenv.sh
     ```
 
-### 3. Lancement bridé à 4 cœurs
+### 4. Lancement bridé à 4 cœurs
 ```bash
 ulimit -n 65535
 cd ~/mesures
@@ -50,27 +67,24 @@ taskset -c 0,1,2,3 ./apache-tomcat-11.0.1/bin/startup.sh
 
 ## ÉTAPE 3 : Benchmarking (M1)
 
+**Où :** Nœud Client.
 ```bash
-# ATTENTION : Utilisez des '-' (tirets) et non des '_' (underscores) pour les noms de machines !
-./wrk2/wrk -t32 -c200 -d60s -R1000 --latency "http://IP_INTERMEDIAIRE:8080/serv/Serv?machine=dahu-11&image=image_1000KB.jpg"
+# UTILISEZ DES TIRETS '-' pour les noms de machines (dahu-11, gros-4)
+./wrk2/wrk -t32 -c200 -d60s -R15000 --latency "http://IP_INTERMEDIAIRE:8080/serv/Serv?machine=NOM-BACKEND&image=small.jpg"
 ```
 
 ---
 
-## DÉPANNAGE : Erreur HTTP 500 (Internal Server Error)
+## ÉTAPE 4 : Monitoring (M2)
+```bash
+mpstat -P 0,1,2,3 1
+```
 
-Si `curl -I` renvoie une **HTTP 500**, le servlet a crashé. Voici les causes classiques sur G5K :
+---
 
-1.  **ERREUR DE TYPO (La plus fréquente)** :
-    *   Les noms de machines sur G5K utilisent des **tirets**, pas des underscores.
-    *   **FAUX** : `machine=dahu_11`
-    *   **VRAI** : `machine=dahu-11`
-2.  **Image manquante** :
-    *   Vérifiez que le fichier `image_1000KB.jpg` existe bien sur le **Backend (M3)**.
-3.  **Vérifier la stacktrace (M2)** :
-    Pour voir l'erreur exacte, regardez la fin du log Tomcat sur l'intermédiaire :
-    ```bash
-    tail -n 50 ~/mesures/apache-tomcat-11.0.1/logs/catalina.out
-    ```
-    *Si vous voyez `java.net.UnknownHostException`, c'est que le nom dans `machine=` est faux.*
-    *Si vous voyez `java.net.ConnectException`, c'est que Tomcat n'est pas lancé sur le Backend.*
+## ANALYSE : Pourquoi je ne vois pas 100% de CPU ?
+
+Si vous avez beaucoup d'Idle malgré une forte charge, lisez le document de justification :
+[**Justification Scientifique (Loi de Little)**](./G5K_SCIENTIFIC_JUSTIFICATION.md)
+
+En résumé : si la latence monte (ex: 15s) mais que le CPU reste à 20% d'idle, vos threads sont en train d'**attendre** le backend ou le réseau. Ils n'utilisent pas le CPU pendant l'attente.
