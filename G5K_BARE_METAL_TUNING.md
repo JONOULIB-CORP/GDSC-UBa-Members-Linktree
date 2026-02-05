@@ -1,6 +1,6 @@
 # Guide de Benchmark Manuel : Protocole de Saturation sur 4 Cœurs (G5K)
 
-Ce document détaille le protocole pour limiter l'exécution à **4 cœurs** sur l'intermédiaire et le **brider** pour atteindre les 100% CPU réels.
+Ce document détaille le protocole pour limiter l'exécution à **4 cœurs** sur l'intermédiaire et atteindre les 100% CPU réels.
 
 ---
 
@@ -25,13 +25,13 @@ sudo-g5k apt-get update && sudo-g5k apt-get install -y openjdk-17-jre sysstat li
 
 ## ÉTAPE 2 : Limitation et BRIDAGE de l'Intermédiaire (M2)
 
-### 1. Brider la fréquence au MINIMUM
+### 1. Brider la fréquence au MINIMUM (Saturation Facile)
 Si vous voulez voir 100% de CPU, il faut rendre le processeur plus lent.
 ```bash
 # 1. Désactiver le Turbo Boost
 echo 1 | sudo-g5k tee /sys/devices/system/cpu/intel_pstate/no_turbo
 
-# 2. Forcer 800MHz (ou 1.2GHz)
+# 2. Forcer 800MHz
 sudo-g5k cpupower frequency-set -d 800MHz -u 800MHz -g performance
 
 # 3. Vérifier
@@ -71,9 +71,15 @@ taskset -c 0,1,2,3 ./apache-tomcat-11.0.1/bin/startup.sh
 ## ÉTAPE 3 : Benchmarking (M1)
 
 **Où :** Nœud Client.
+
+### Loi de Performance : Fréquence vs Débit (RPS)
+Il y a un compromis mathématique entre la fréquence du CPU et le débit (RPS) :
+*   **Fréquence Haute (Turbo)** : RPS maximal (~30k+), mais saturation CPU difficile à atteindre (car le CPU est trop rapide).
+*   **Fréquence Basse (800MHz)** : RPS réduit (~10k), mais **Saturation CPU Facile (100%)**.
+
 ```bash
-# Testez avec -c 200 et un -R progressif (20k, 25k, 30k)
-./wrk2/wrk -t32 -c200 -d60s -R30000 --latency "http://IP_INTERMEDIAIRE:8080/serv/Serv?machine=NOM_BACKEND&image=small.jpg"
+# Pour un CPU bridé à 800MHz, testez avec -c 200 et un -R entre 10 000 et 15 000.
+./wrk2/wrk -t32 -c200 -d60s -R15000 --latency "http://IP_INTERMEDIAIRE:8080/serv/Serv?machine=NOM_BACKEND&image=small.jpg"
 ```
 
 ---
@@ -82,12 +88,9 @@ taskset -c 0,1,2,3 ./apache-tomcat-11.0.1/bin/startup.sh
 
 | Métrique | État : Saturation Saine | État : Effondrement (Collapse) |
 | :--- | :--- | :--- |
-| **CPU Idle** | Entre 1% et 5% | **Proche de 0%** |
-| **Latence** | Faible (< 100ms) | **Énorme (> 10s)** |
-| **RPS Observé** | Proche du RPS cible (-R) | **Très inférieur au cible** |
-| **Signification** | Le système est à son maximum utile. | Le système est noyé (overhead massif). |
+| **CPU Idle** | Entre 0% et 2% | **0.00% constant** |
+| **Latence** | Faible (< 500ms) | **Énorme (> 10s)** |
+| **RPS Observé** | Égal au RPS cible (-R) | **Très inférieur au cible** |
 
-### Vos derniers résultats (94% CPU, 31s Latence)
-*   **Victoire** : Vous avez cassé le plateau des 90% ! Les cœurs sont à ~94%.
-*   **Problème** : Avec 31s de latence et un RPS observé qui chute (7k alors que vous aviez 23k précédemment), vous êtes en **effondrement**.
-*   **Action** : Réduisez `-R` (ex: tentez `-R 28000`) pour trouver le point où le CPU est à **95%** mais la latence reste sous **1 seconde**. C'est le point de performance maximal réel de votre machine.
+**Conclusion de vos derniers tests :**
+En passant de 2.1GHz à 800MHz, vous êtes passé de 15% d'idle à **7% d'idle**. C'est une réussite. Pour atteindre les 0% d'idle, augmentez légèrement `-R` ou réduisez encore un peu plus `-c`.
