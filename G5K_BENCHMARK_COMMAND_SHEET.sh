@@ -1,6 +1,6 @@
 #!/bin/bash
 # ==============================================================================
-# FEUILLE DE ROUTE : TOUTES LES COMMANDES DU BENCHMARK (RÉVISÉE POUR DAHAU)
+# FEUILLE DE ROUTE : TOUTES LES COMMANDES DU BENCHMARK (RÉVISÉE ET ROBUSTE)
 # Projet : mesures | Machine : Bare Metal G5K (4 cœurs sur Inter)
 # ==============================================================================
 
@@ -43,33 +43,30 @@ for IRQ in $IRQS; do
     echo "f" | sudo-g5k tee /proc/irq/$IRQ/smp_affinity > /dev/null
 done
 
-# --- D. TUNING TOMCAT (ROBUSTE) ---
-# 1. Configurer Threads à 1000
-sed -i 's/maxThreads="[0-9]*"/maxThreads="1000"/' ~/mesures/apache-tomcat-11.0.1/conf/server.xml
-# 2. Supprimer la Valve AccessLog (Même si elle est sur plusieurs lignes)
+# --- D. TUNING TOMCAT (VERSION ANTI-ERREUR) ---
+# 1. Nettoyage et Réécriture du Connector (Évite les doublons d'attributs)
+sed -i '/<Connector port="8080"/,/\/>/c\    <Connector port="8080" protocol="HTTP/1.1" connectionTimeout="20000" redirectPort="8443" maxThreads="1000" socket.appReadBufSize="65536" socket.appWriteBufSize="65536" bufferSize="16384" />' ~/mesures/apache-tomcat-11.0.1/conf/server.xml
+
+# 2. Désactiver les Logs d'accès (Suppression propre de la Valve)
 sed -i '/AccessLogValve/,/\/>/d' ~/mesures/apache-tomcat-11.0.1/conf/server.xml
+
 # 3. Optimiser la JVM
 echo 'export CATALINA_OPTS="-Xms4G -Xmx4G -XX:+UseG1GC"' > ~/mesures/apache-tomcat-11.0.1/bin/setenv.sh
 chmod +x ~/mesures/apache-tomcat-11.0.1/bin/setenv.sh
 
-# --- E. LANCEMENT ET VÉRIFICATION ---
+# 4. VÉRIFIER LA SYNTAXE XML (Si erreur ici, Tomcat ne démarrera pas)
+~/mesures/apache-tomcat-11.0.1/bin/catalina.sh configtest
+
+# --- E. LANCEMENT ---
 ulimit -n 65535
 ./apache-tomcat-11.0.1/bin/shutdown.sh 2>/dev/null || true
 sleep 2
 # Lancement sur les cœurs 0-3
 taskset -c 0,1,2,3 ./apache-tomcat-11.0.1/bin/startup.sh
 
-# --- F. VÉRIFICATION DE SANTÉ (Si Connection Refused) ---
-# 1. Vérifier si le processus tourne
-ps aux | grep catalina
-# 2. Vérifier si le port 8080 est ouvert
-ss -tlnp | grep 8080
-# 3. Voir les erreurs si Tomcat n'a pas démarré
-tail -n 50 ~/mesures/apache-tomcat-11.0.1/logs/catalina.out
-
 
 # ==============================================================================
 # ÉTAPE 3 : SUR LE CLIENT (M1)
 # ==============================================================================
-# Lancer le test (Adapter IP_M2 et NOM_M3)
+# Lancer le test
 ./wrk2/wrk -t32 -c200 -d60s -R15000 --latency "http://IP_INTERMEDIAIRE:8080/serv/Serv?machine=NOM-BACKEND&image=image_1KB.jpg"
