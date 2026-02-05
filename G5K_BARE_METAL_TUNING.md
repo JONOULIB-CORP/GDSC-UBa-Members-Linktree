@@ -25,13 +25,13 @@ sudo-g5k apt-get update && sudo-g5k apt-get install -y openjdk-17-jre sysstat li
 
 ## ÉTAPE 2 : Limitation et BRIDAGE de l'Intermédiaire (M2)
 
-### 1. Brider la fréquence au MINIMUM (La clé du 100%)
-Si 1.2GHz laisse encore de l'idle, passez au minimum absolu (souvent 800MHz ou 1GHz).
+### 1. Brider la fréquence au MINIMUM
+Si vous voulez voir 100% de CPU, il faut rendre le processeur plus lent.
 ```bash
 # 1. Désactiver le Turbo Boost
 echo 1 | sudo-g5k tee /sys/devices/system/cpu/intel_pstate/no_turbo
 
-# 2. Forcer 800MHz (ou le min de 'cpupower frequency-info')
+# 2. Forcer 800MHz (ou 1.2GHz)
 sudo-g5k cpupower frequency-set -d 800MHz -u 800MHz -g performance
 
 # 3. Vérifier
@@ -68,22 +68,26 @@ taskset -c 0,1,2,3 ./apache-tomcat-11.0.1/bin/startup.sh
 
 ---
 
-## ÉTAPE 3 : Benchmarking (M1) - Le réglage fin
-
-Vos derniers résultats (~87% CPU) montrent que le système "étouffe" sous le nombre de connexions. Pour atteindre 100%, il faut réduire l'overhead.
+## ÉTAPE 3 : Benchmarking (M1)
 
 **Où :** Nœud Client.
 ```bash
-# RÉDUISEZ -c (connexions) pour augmenter l'efficacité.
-# Testez avec -c 200 et un -R très élevé (40 000).
-./wrk2/wrk -t32 -c200 -d60s -R40000 --latency "http://IP_INTERMEDIAIRE:8080/serv/Serv?machine=NOM_BACKEND&image=small.jpg"
+# Testez avec -c 200 et un -R progressif (20k, 25k, 30k)
+./wrk2/wrk -t32 -c200 -d60s -R30000 --latency "http://IP_INTERMEDIAIRE:8080/serv/Serv?machine=NOM_BACKEND&image=small.jpg"
 ```
 
 ---
 
-## ANALYSE : Pourquoi le CPU stagne ?
+## ANALYSE : Interprétation des Résultats
 
-Si vous voyez votre RPS observé **baisser** alors que vous augmentez `-R` (ex: 23.3k au lieu de 23.9k), vous avez dépassé le **point de rupture**. Le CPU perd son temps en "Context Switching" (le noyau change de thread sans arrêt).
+| Métrique | État : Saturation Saine | État : Effondrement (Collapse) |
+| :--- | :--- | :--- |
+| **CPU Idle** | Entre 1% et 5% | **Proche de 0%** |
+| **Latence** | Faible (< 100ms) | **Énorme (> 10s)** |
+| **RPS Observé** | Proche du RPS cible (-R) | **Très inférieur au cible** |
+| **Signification** | Le système est à son maximum utile. | Le système est noyé (overhead massif). |
 
-1.  **Réduire la Concurrence** : Passer de `-c 500` à `-c 200` permet à chaque thread d'avoir plus de temps CPU utile.
-2.  **Diminuer la Fréquence** : Si le CPU est trop rapide, il finit ses tâches trop vite et attend. À **800MHz**, chaque cycle compte et l'idle disparaîtra.
+### Vos derniers résultats (94% CPU, 31s Latence)
+*   **Victoire** : Vous avez cassé le plateau des 90% ! Les cœurs sont à ~94%.
+*   **Problème** : Avec 31s de latence et un RPS observé qui chute (7k alors que vous aviez 23k précédemment), vous êtes en **effondrement**.
+*   **Action** : Réduisez `-R` (ex: tentez `-R 28000`) pour trouver le point où le CPU est à **95%** mais la latence reste sous **1 seconde**. C'est le point de performance maximal réel de votre machine.
