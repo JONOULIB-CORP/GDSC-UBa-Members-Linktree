@@ -74,4 +74,7 @@ To submit your task, create a pull request to this repository. You can find more
 ---
 
 ## 🛠️ Grid'5000 Optimization Guide
-For the manual benchmarking session, please refer to [G5K_BARE_METAL_TUNING.md](./G5K_BARE_METAL_TUNING.md) for commands and steps to maximize CPU utilization.
+For the manual benchmarking session, please refer to:
+*   [G5K_BENCHMARK_COMMAND_SHEET.sh](./G5K_BENCHMARK_COMMAND_SHEET.sh) : **Liste de toutes les commandes à copier-coller (recommandé)**.
+*   [G5K_BARE_METAL_TUNING.md](./G5K_BARE_METAL_TUNING.md) : Guide détaillé par nœud et par étape.
+*   [G5K_SCIENTIFIC_JUSTIFICATION.md](./G5K_SCIENTIFIC_JUSTIFICATION.md) : Explications scientifiques des goulots d'étranglement rencontrés.
