@@ -69,7 +69,7 @@ server {
 }
 EOF
 
-sudo-g5k ln -s /etc/nginx/sites-available/serv-proxy /etc/nginx/sites-enabled/
+sudo-g5k ln -sf /etc/nginx/sites-available/serv-proxy /etc/nginx/sites-enabled/
 sudo-g5k rm -f /etc/nginx/sites-enabled/default
 sudo-g5k systemctl restart nginx
 
