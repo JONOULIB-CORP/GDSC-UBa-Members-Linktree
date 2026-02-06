@@ -1,72 +1,100 @@
 #!/bin/bash
+
 # ==============================================================================
-# FEUILLE DE ROUTE : TOUTES LES COMMANDES DU BENCHMARK (RÉVISÉE ET ROBUSTE)
-# Projet : mesures | Machine : Bare Metal G5K (4 cœurs sur Inter)
+# G5K BENCHMARK COMMAND SHEET (4-NODE SETUP: M1-M2-M3-M4)
+# ==============================================================================
+# Architecture:
+# M1 (Client) -> M2 (Load Balancer) -> M3 (Web Server/Proxy) -> M4 (Final Server)
 # ==============================================================================
 
-# --- PRÉPARATION (SUR LES 3 NOEUDS : M1, M2, M3) ---
-sudo-g5k apt-get update
-sudo-g5k apt-get install -y openjdk-17-jre sysstat linux-cpupower build-essential git
+# ------------------------------------------------------------------------------
+# 1. SETUP NODE M4 (FINAL SERVER - STORAGE)
+# ------------------------------------------------------------------------------
+# Role: Serve local files to M3
+# No CPU throttling needed.
+
+# Install Java 17 (Required for Tomcat 11)
+sudo-g5k apt update && sudo-g5k apt install -y openjdk-17-jre
+
+# Deploy Tomcat & Servlet
 cd ~/mesures
+./setup_tomcat.sh  # Ensure it deploys serv.war (local serving mode)
 
+# Verify local file access
+curl -I "http://localhost:8080/serv/Serv?image=small.jpg"
 
-# ==============================================================================
-# ÉTAPE 1 : SUR LE BACKEND (M3)
-# ==============================================================================
-# 1. Tuning Kernel
-sudo-g5k sysctl -w net.core.somaxconn=10000
-sudo-g5k sysctl -w net.core.netdev_max_backlog=100000
+# ------------------------------------------------------------------------------
+# 2. SETUP NODE M3 (WEB SERVER - PROXY UNDER TEST)
+# ------------------------------------------------------------------------------
+# Role: Proxy requests to M4. THIS IS THE BOTTLENECK NODE.
 
-# 2. Démarrer Tomcat
-./apache-tomcat-11.0.1/bin/startup.sh
+# Install Java 17
+sudo-g5k apt update && sudo-g5k apt install -y openjdk-17-jre
 
+# Deploy Tomcat & Servlet
+cd ~/mesures
+./setup_tomcat.sh
 
-# ==============================================================================
-# ÉTAPE 2 : SUR L'INTERMÉDIAIRE (M2)
-# ==============================================================================
+# --- TUNING M3 (The "Intermediate" role) ---
 
-# --- A. BRIDAGE MATÉRIEL ---
-echo 1 | sudo-g5k tee /sys/devices/system/cpu/intel_pstate/no_turbo
-sudo-g5k cpupower frequency-set -d 800MHz -u 800MHz -g performance
+# A. CPU Throttling (Limit to 4 cores & 800MHz)
+echo "powersave" | sudo-g5k tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
+echo "800000" | sudo-g5k tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_max_freq
+sudo-g5k taskset -pc 0-3 $(pgrep -f tomcat)
 
-# --- B. TUNING KERNEL ---
-sudo-g5k sysctl -w net.core.somaxconn=10000
-sudo-g5k sysctl -w net.core.netdev_max_backlog=100000
-sudo-g5k sysctl -w net.ipv4.tcp_max_syn_backlog=10000
-sudo-g5k sysctl -w net.ipv4.tcp_tw_reuse=1
+# B. Kernel Network Tuning
+sudo-g5k sysctl -w net.core.somaxconn=1024
+sudo-g5k sysctl -w net.core.netdev_max_backlog=2000
+sudo-g5k sysctl -w net.ipv4.tcp_max_syn_backlog=1024
 
-# --- C. AFFINITÉ IRQ ---
-sudo-g5k systemctl stop irqbalance 2>/dev/null || true
-INTERFACE=$(ip route get 8.8.8.8 | grep -oP 'dev \K\S+')
-IRQS=$(grep -E "$INTERFACE|mlx5_comp" /proc/interrupts | awk '{print $1}' | sed 's/://')
-for IRQ in $IRQS; do
-    echo "f" | sudo-g5k tee /proc/irq/$IRQ/smp_affinity > /dev/null
-done
+# C. Tomcat Threading (server.xml)
+# Set maxThreads="1000" and minSpareThreads="100" in <Connector port="8080" ... />
 
-# --- D. TUNING TOMCAT (VERSION ANTI-ERREUR) ---
-# 1. Nettoyage et Réécriture du Connector (Évite les doublons d'attributs)
-sed -i '/<Connector port="8080"/,/\/>/c\    <Connector port="8080" protocol="HTTP/1.1" connectionTimeout="20000" redirectPort="8443" maxThreads="1000" socket.appReadBufSize="65536" socket.appWriteBufSize="65536" bufferSize="16384" />' ~/mesures/apache-tomcat-11.0.1/conf/server.xml
+# ------------------------------------------------------------------------------
+# 3. SETUP NODE M2 (LOAD BALANCER - NGINX)
+# ------------------------------------------------------------------------------
+# Role: Transparently forward M1 requests to M3
 
-# 2. Désactiver les Logs d'accès (Suppression propre de la Valve)
-sed -i '/AccessLogValve/,/\/>/d' ~/mesures/apache-tomcat-11.0.1/conf/server.xml
+sudo-g5k apt update && sudo-g5k apt install -y nginx
 
-# 3. Optimiser la JVM
-echo 'export CATALINA_OPTS="-Xms4G -Xmx4G -XX:+UseG1GC"' > ~/mesures/apache-tomcat-11.0.1/bin/setenv.sh
-chmod +x ~/mesures/apache-tomcat-11.0.1/bin/setenv.sh
+# Create Proxy Config
+cat <<EOF | sudo-g5k tee /etc/nginx/sites-available/serv-proxy
+server {
+    listen 8080;
+    location /serv/ {
+        proxy_pass http://<IP_M3>:8080/serv/;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_buffers 16 16k;
+        proxy_buffer_size 32k;
+    }
+}
+EOF
 
-# 4. VÉRIFIER LA SYNTAXE XML (Si erreur ici, Tomcat ne démarrera pas)
-~/mesures/apache-tomcat-11.0.1/bin/catalina.sh configtest
+sudo-g5k ln -s /etc/nginx/sites-available/serv-proxy /etc/nginx/sites-enabled/
+sudo-g5k rm -f /etc/nginx/sites-enabled/default
+sudo-g5k systemctl restart nginx
 
-# --- E. LANCEMENT ---
-ulimit -n 65535
-./apache-tomcat-11.0.1/bin/shutdown.sh 2>/dev/null || true
-sleep 2
-# Lancement sur les cœurs 0-3
-taskset -c 0,1,2,3 ./apache-tomcat-11.0.1/bin/startup.sh
+# ------------------------------------------------------------------------------
+# 4. EXECUTION ON M1 (CLIENT - LOAD GENERATOR)
+# ------------------------------------------------------------------------------
 
+# Target: M2 (LB)
+# Parameter 'machine': M4 (Final Server)
 
-# ==============================================================================
-# ÉTAPE 3 : SUR LE CLIENT (M1)
-# ==============================================================================
-# Lancer le test
-./wrk2/wrk -t32 -c200 -d60s -R15000 --latency "http://IP_INTERMEDIAIRE:8080/serv/Serv?machine=NOM-BACKEND&image=image_1KB.jpg"
+# Test 1: Small Image (1KB) - Goal: Saturation RPS (CPU Bound on M3)
+wrk -t12 -c200 -d30s -R2000 --latency \
+"http://<IP_M2>:8080/serv/Serv?machine=<IP_M4>&image=small.jpg"
+
+# Test 2: Large Image (1MB) - Goal: Saturation Bandwidth (I/O Bound)
+wrk -t12 -c200 -d30s -R500 --latency \
+"http://<IP_M2>:8080/serv/Serv?machine=<IP_M4>&image=large.jpg"
+
+# ------------------------------------------------------------------------------
+# 5. MONITORING (DURING RUN)
+# ------------------------------------------------------------------------------
+# On M3: check CPU usage per core
+mpstat -P ALL 1
+
+# On M3: check network queues
+ss -lnt

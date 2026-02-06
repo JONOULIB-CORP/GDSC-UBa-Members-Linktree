@@ -1,81 +1,74 @@
-# Guide de Benchmark Manuel : Protocole de Saturation sur 4 Cœurs (G5K)
+# Grid'5000 Bare-Metal Tuning Guide (4-Node Setup)
 
-Ce document détaille le protocole pour limiter l'exécution à **4 cœurs** sur l'intermédiaire et le **brider** pour atteindre les 100% CPU réels.
+This guide provides the necessary steps to achieve high CPU utilization and stable benchmarks on Grid'5000 physical nodes in a 4-tier architecture (**M1-M2-M3-M4**).
 
----
-
-## 0. Préparation (Sur TOUS les nœuds : C, I, S)
-
-```bash
-sudo-g5k apt-get update && sudo-g5k apt-get install -y openjdk-17-jre sysstat linux-cpupower
-```
+## Architecture Mapping
+*   **M1**: Client (wrk)
+*   **M2**: Load Balancer (Nginx) - *Keep default high performance*
+*   **M3**: **Web Server (Tomcat Proxy) - TARGET FOR TUNING**
+*   **M4**: Final Server (Tomcat Storage) - *Keep default high performance*
 
 ---
 
-## ÉTAPE 1 : Configuration du Serveur Backend (M3)
+## 1. M3 CPU Throttling (Simulate Bottleneck)
+To reach >90% CPU utilization on M3, we must bridle the hardware to prevent the CPU from outperforming the network/interrupt handling.
 
-**Où :** Nœud Backend.
-1.  **Démarrer Tomcat.**
-2.  **Tuning Kernel** :
-    ```bash
-    sudo-g5k sysctl -w net.core.somaxconn=10000
-    ```
-
----
-
-## ÉTAPE 2 : Limitation et BRIDAGE de l'Intermédiaire (M2)
-
-### 1. Brider la fréquence au MINIMUM
+### Frequency Bridling
 ```bash
-echo 1 | sudo-g5k tee /sys/devices/system/cpu/intel_pstate/no_turbo
-sudo-g5k cpupower frequency-set -d 800MHz -u 800MHz -g performance
+# Set governor to powersave (allows manual frequency cap)
+echo "powersave" | sudo-g5k tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
+
+# Cap frequency at 800MHz
+echo "800000" | sudo-g5k tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_max_freq
 ```
 
-### 2. DÉBLOQUER LE NOYAU
+### Core Pinning
+Force Tomcat to run on only 4 physical cores to concentrate the load.
 ```bash
-sudo-g5k sysctl -w net.core.somaxconn=10000
-sudo-g5k sysctl -w net.core.netdev_max_backlog=100000
-```
-
-### 3. Tuning Tomcat (VERSION ROBUSTE)
-Certaines commandes précédentes ont pu corrompre votre `server.xml` en ajoutant des attributs en double. Utilisez cette commande pour **réinitialiser et optimiser** proprement le connecteur :
-
-```bash
-# 1. Réécriture propre du Connecteur (Évite les erreurs de syntaxe XML)
-sed -i '/<Connector port="8080"/,/\/>/c\    <Connector port="8080" protocol="HTTP/1.1" connectionTimeout="20000" redirectPort="8443" maxThreads="1000" socket.appReadBufSize="65536" socket.appWriteBufSize="65536" bufferSize="16384" />' ~/mesures/apache-tomcat-11.0.1/conf/server.xml
-
-# 2. Désactivation propre des logs
-sed -i '/AccessLogValve/,/\/>/d' ~/mesures/apache-tomcat-11.0.1/conf/server.xml
-
-# 3. Mémoire (JVM)
-echo 'export CATALINA_OPTS="-Xms4G -Xmx4G -XX:+UseG1GC"' > ~/mesures/apache-tomcat-11.0.1/bin/setenv.sh
-chmod +x ~/mesures/apache-tomcat-11.0.1/bin/setenv.sh
-
-# 4. VÉRIFICATION (Si Tomcat ne démarre pas, l'erreur sera affichée ici)
-~/mesures/apache-tomcat-11.0.1/bin/catalina.sh configtest
-```
-
-### 4. Lancement bridé à 4 cœurs
-```bash
-ulimit -n 65535
-cd ~/mesures
-taskset -c 0,1,2,3 ./apache-tomcat-11.0.1/bin/startup.sh
+# Pin Tomcat to cores 0-3
+sudo-g5k taskset -pc 0-3 $(pgrep -f tomcat)
 ```
 
 ---
 
-## ÉTAPE 3 : Benchmarking (M1)
+## 2. M3 Kernel Network Tuning
+Standard Debian/Ubuntu settings are too low for high RPS (>2000).
 
 ```bash
-./wrk2/wrk -t32 -c200 -d60s -R15000 --latency "http://IP_INTERMEDIAIRE:8080/serv/Serv?machine=NOM-BACKEND&image=small.jpg"
+# Increase the size of the listen queue
+sudo-g5k sysctl -w net.core.somaxconn=1024
+
+# Increase the number of packets allowed in the input queue
+sudo-g5k sysctl -w net.core.netdev_max_backlog=2000
+
+# Increase the max SYN backlog
+sudo-g5k sysctl -w net.ipv4.tcp_max_syn_backlog=1024
 ```
 
 ---
 
-## DÉPANNAGE : Erreur "Connection refused" ou "SAXParseException"
+## 3. M3 Application Tuning (Tomcat)
+Ensure Tomcat is not throttling itself before the CPU hits 100%.
 
-Si Tomcat refuse de démarrer, c'est que votre fichier `server.xml` contient des erreurs (souvent des attributs en double comme `socket.appReadBufSize`).
+### Thread Pool (`conf/server.xml`)
+Increase `maxThreads` to ensure we don't block on the application level during proxying.
+```xml
+<Connector port="8080" protocol="HTTP/1.1"
+           connectionTimeout="20000"
+           maxThreads="1000"
+           minSpareThreads="100"
+           redirectPort="8443" />
+```
 
-1.  **Vérifier la cause** : `~/mesures/apache-tomcat-11.0.1/bin/catalina.sh configtest`
-2.  **Si erreur XML** : Utilisez la commande `sed` de l'Étape 2.3.1 pour écraser le bloc corrompu par une version propre.
-3.  **Vérifier les logs** : `tail -n 50 ~/mesures/apache-tomcat-11.0.1/logs/catalina.out`
+### Disable Logging
+I/O wait for access logs can artificially lower CPU usage.
+Comment out the `AccessLogValve` in `server.xml`.
+
+---
+
+## 4. Verification Protocol
+1.  **Monitor M3** with `mpstat -P ALL 1`.
+2.  **Verify M3 Load** with `top` (should see 4 cores near 100%).
+3.  **Check M1 (Client)** output:
+    *   If `Socket errors: connect` -> Increase `somaxconn`.
+    *   If `Socket errors: timeout` -> Increase Tomcat `maxThreads` or M3 is truly saturated.
