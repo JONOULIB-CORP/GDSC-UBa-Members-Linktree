@@ -8,6 +8,8 @@ This guide provides the necessary steps to achieve high CPU utilization and stab
 *   **M3**: **Web Server (Tomcat Proxy) - TARGET FOR TUNING**
 *   **M4**: Final Server (Tomcat Storage) - *Keep default high performance*
 
+**Note**: Tomcat is located in `~/mesures/apache-tomcat-11.0.1`. All configuration changes (`conf/server.xml`) should be made in that directory.
+
 ---
 
 ## 1. M3 CPU Throttling (Simulate Bottleneck)

@@ -5,20 +5,21 @@
 # ==============================================================================
 # Architecture:
 # M1 (Client) -> M2 (Load Balancer) -> M3 (Web Server/Proxy) -> M4 (Final Server)
+#
+# NOTE: All nodes access the same shared folder ~/mesures via NFS.
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
 # 1. SETUP NODE M4 (FINAL SERVER - STORAGE)
 # ------------------------------------------------------------------------------
 # Role: Serve local files to M3
-# No CPU throttling needed.
 
 # Install Java 17 (Required for Tomcat 11)
 sudo-g5k apt update && sudo-g5k apt install -y openjdk-17-jre
 
-# Deploy Tomcat & Servlet
-cd ~/mesures
-./setup_tomcat.sh  # Ensure it deploys serv.war (local serving mode)
+# Start Tomcat (assuming serv.war is already in webapps/)
+cd ~/mesures/apache-tomcat-11.0.1
+./bin/startup.sh
 
 # Verify local file access
 curl -I "http://localhost:8080/serv/Serv?image=small.jpg"
@@ -31,9 +32,9 @@ curl -I "http://localhost:8080/serv/Serv?image=small.jpg"
 # Install Java 17
 sudo-g5k apt update && sudo-g5k apt install -y openjdk-17-jre
 
-# Deploy Tomcat & Servlet
-cd ~/mesures
-./setup_tomcat.sh
+# Start Tomcat
+cd ~/mesures/apache-tomcat-11.0.1
+./bin/startup.sh
 
 # --- TUNING M3 (The "Intermediate" role) ---
 
@@ -46,9 +47,6 @@ sudo-g5k taskset -pc 0-3 $(pgrep -f tomcat)
 sudo-g5k sysctl -w net.core.somaxconn=1024
 sudo-g5k sysctl -w net.core.netdev_max_backlog=2000
 sudo-g5k sysctl -w net.ipv4.tcp_max_syn_backlog=1024
-
-# C. Tomcat Threading (server.xml)
-# Set maxThreads="1000" and minSpareThreads="100" in <Connector port="8080" ... />
 
 # ------------------------------------------------------------------------------
 # 3. SETUP NODE M2 (LOAD BALANCER - NGINX)
@@ -83,11 +81,12 @@ sudo-g5k systemctl restart nginx
 # Parameter 'machine': M4 (Final Server)
 
 # Test 1: Small Image (1KB) - Goal: Saturation RPS (CPU Bound on M3)
-wrk -t12 -c200 -d30s -R2000 --latency \
+# Note: uses -R (rate) from wrk2
+~/mesures/wrk2/wrk -t12 -c200 -d30s -R2000 --latency \
 "http://<IP_M2>:8080/serv/Serv?machine=<IP_M4>&image=small.jpg"
 
 # Test 2: Large Image (1MB) - Goal: Saturation Bandwidth (I/O Bound)
-wrk -t12 -c200 -d30s -R500 --latency \
+~/mesures/wrk2/wrk -t12 -c200 -d30s -R500 --latency \
 "http://<IP_M2>:8080/serv/Serv?machine=<IP_M4>&image=large.jpg"
 
 # ------------------------------------------------------------------------------
