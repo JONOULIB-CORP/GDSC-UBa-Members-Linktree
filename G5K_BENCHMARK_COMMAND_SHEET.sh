@@ -38,10 +38,10 @@ cd ~/mesures/apache-tomcat-11.0.1
 
 # --- TUNING M3 (The "Intermediate" role) ---
 
-# A. CPU Throttling (Limit to 4 cores & 800MHz)
-echo "powersave" | sudo-g5k tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
-echo "800000" | sudo-g5k tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_max_freq
-sudo-g5k taskset -pc 0-3 $(pgrep -f tomcat)
+# A. Restrict to 4 cores (Disable CPUs 4 to 63)
+for i in $(seq 4 63); do
+  echo "0" | sudo-g5k tee /sys/devices/system/cpu/cpu"$i"/online
+done
 
 # B. Kernel Network Tuning
 sudo-g5k sysctl -w net.core.somaxconn=1024

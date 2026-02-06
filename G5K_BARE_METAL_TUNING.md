@@ -12,23 +12,15 @@ This guide provides the necessary steps to achieve high CPU utilization and stab
 
 ---
 
-## 1. M3 CPU Throttling (Simulate Bottleneck)
-To reach >90% CPU utilization on M3, we must bridle the hardware to prevent the CPU from outperforming the network/interrupt handling.
+## 1. M3 Core Restriction (Simulate 4-Core Node)
+To observe CPU consumption in a controlled environment, we restrict M3 to exactly 4 cores. This is done by disabling all other CPUs at the kernel level.
 
-### Frequency Bridling
+### Disabling Extra Cores
 ```bash
-# Set governor to powersave (allows manual frequency cap)
-echo "powersave" | sudo-g5k tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
-
-# Cap frequency at 800MHz
-echo "800000" | sudo-g5k tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_max_freq
-```
-
-### Core Pinning
-Force Tomcat to run on only 4 physical cores to concentrate the load.
-```bash
-# Pin Tomcat to cores 0-3
-sudo-g5k taskset -pc 0-3 $(pgrep -f tomcat)
+# Disable CPUs 4 to 63 to keep only cores 0-3 active
+for i in $(seq 4 63); do
+  echo "0" | sudo-g5k tee /sys/devices/system/cpu/cpu"$i"/online
+done
 ```
 
 ---
