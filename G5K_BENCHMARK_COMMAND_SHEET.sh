@@ -56,18 +56,18 @@ sudo-g5k sysctl -w net.ipv4.tcp_max_syn_backlog=1024
 sudo-g5k apt update && sudo-g5k apt install -y nginx
 
 # Create Proxy Config with Keep-Alive to M3
+# IMPORTANT: Replace <IP_M3> with the real IP of node M3
 cat <<EOF | sudo-g5k tee /etc/nginx/sites-available/serv-proxy
 upstream tomcat_backend {
     server <IP_M3>:8080;
-    keepalive 100; # Keep 100 idle connections open to M3
+    keepalive 100;
 }
 
 server {
     listen 8080;
     location /serv/ {
-        proxy_pass http://tomcat_backend/serv/;
+        proxy_pass http://tomcat_backend;
 
-        # Mandatory for Upstream Keep-Alive
         proxy_http_version 1.1;
         proxy_set_header Connection "";
 
@@ -83,6 +83,11 @@ EOF
 sudo-g5k ln -sf /etc/nginx/sites-available/serv-proxy /etc/nginx/sites-enabled/
 sudo-g5k rm -f /etc/nginx/sites-enabled/default
 sudo-g5k systemctl restart nginx
+
+# --- SAFETY CHECK (From M2) ---
+# Verify that M2 can reach M3 before starting the benchmark
+# Expected: HTTP/1.1 200 OK (or similar)
+curl -I "http://localhost:8080/serv/Serv?image=small.jpg"
 
 # ------------------------------------------------------------------------------
 # 4. EXECUTION ON M1 (CLIENT - LOAD GENERATOR)
