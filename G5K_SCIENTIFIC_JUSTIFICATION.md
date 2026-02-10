@@ -41,5 +41,22 @@ $$\lambda = L / W$$
 
 ---
 
+## 4. L'Effet du 4ème Nœud : La "Taxe TCP"
+
+L'ajout de M2 (Nginx) introduit un saut réseau supplémentaire. Si la connexion entre M2 et M3 n'est pas persistante (Keep-Alive), chaque requête de 1KB subit une "taxe" énorme.
+
+### Pourquoi le RPS s'effondre (ex: 24k -> 13k) ?
+Sans Keep-Alive entre M2 et M3 :
+1.  **Triple Handshake** : Pour chaque image de 1KB, le système doit d'abord échanger 3 paquets (SYN, SYN-ACK, ACK) pour ouvrir la connexion.
+2.  **Fermeture** : Puis échanger des paquets pour fermer la connexion.
+3.  **Coût CPU** : Le CPU de M3 (Web Server) passe plus de temps à gérer l'ouverture/fermeture des sockets qu'à traiter les images.
+
+### Analyse de vos résultats :
+*   **Ancien (3-tier)** : 88% CPU pour 24 000 RPS.
+*   **Nouveau (4-tier)** : 82% CPU pour 13 000 RPS.
+*   **Verdict** : Le coût CPU par requête a augmenté de **~70%**. M3 travaille beaucoup plus dur pour faire moins de choses. C'est le goulot d'étranglement de la gestion des connexions.
+
+---
+
 ## Conclusion Scientifique
-"Le passage d'images de 1KB à 1MB déplace le goulot d'étranglement de la **Logique de Calcul** (CPU de M2) vers la **Logique de Transfert** (Bande passante Backend/Réseau). M2 reste partiellement idle car il est 'affamé' par M3 : il traite les données plus vite qu'il ne les reçoit."
+"Le passage d'images de 1KB à 1MB déplace le goulot d'étranglement de la **Logique de Calcul** vers la **Logique de Transfert**. L'ajout d'un 4ème nœud (Load Balancer) introduit une **Taxe de Connexion** qui peut diviser par deux les performances si les connexions persistantes (Keep-Alive) ne sont pas activées de bout en bout."

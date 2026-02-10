@@ -55,14 +55,25 @@ sudo-g5k sysctl -w net.ipv4.tcp_max_syn_backlog=1024
 
 sudo-g5k apt update && sudo-g5k apt install -y nginx
 
-# Create Proxy Config
+# Create Proxy Config with Keep-Alive to M3
 cat <<EOF | sudo-g5k tee /etc/nginx/sites-available/serv-proxy
+upstream tomcat_backend {
+    server <IP_M3>:8080;
+    keepalive 100; # Keep 100 idle connections open to M3
+}
+
 server {
     listen 8080;
     location /serv/ {
-        proxy_pass http://<IP_M3>:8080/serv/;
+        proxy_pass http://tomcat_backend/serv/;
+
+        # Mandatory for Upstream Keep-Alive
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
+
         proxy_buffers 16 16k;
         proxy_buffer_size 32k;
     }
