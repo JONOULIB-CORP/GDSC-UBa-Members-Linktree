@@ -1,0 +1,240 @@
+# -*- coding: utf-8 -*-
+import os, subprocess, re, csv, datetime, argparse, random, time
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+# ==============================================================================
+# 1. CONFIGURATION ET TOPOLOGIE (Version 4-Tier)
+# ==============================================================================
+TOPOLOGY = {
+    "client":       {"ip": "172.16.20.8"},
+    "lb":           {"ip": "172.16.20.21"}, # M2 (Load Balancer)
+    "intermediate": {"ip": "172.16.20.20", "hostname": "dahu-20"}, # M3 (Proxy)
+    "backend":      {"ip": "172.16.20.12", "hostname": "dahu-12"}  # M4 (Storage)
+}
+
+# Paramètres de mesure
+WARMUP_SEC           = 15
+MEASURE_SEC          = 60
+WRK_THREADS          = 12
+WRK_CONNECTIONS      = 400
+TIMEOUT              = "15s"
+FIXED_RPS_COMPARISON = 500
+
+# Seuils de diagnostic scientifique
+THEO_BW_GBPS         = 9.4
+THEO_CPU_LIMIT       = 95.0
+
+STRATEGY = {
+    "Serv": {
+        "small": {"start": 500, "step": 5000, "max": 40000}, # Augmenté pour saturation
+        "large": {"start": 500, "step": 500,  "max": 7500}
+    },
+    "Serv-odb": {
+        "small": {"start": 500, "step": 10000, "max": 60000},
+        "large": {"start": 500,  "step": 10000, "max": 60000}
+    }
+}
+
+APPLICATIONS = {
+    "Serv":     {"endpoint": "/serv/Serv"},
+    "Serv-odb": {"endpoint": "/serv1/Serv"}
+}
+
+FULL_PAYLOAD_POOL = {
+    "image_1KB.jpg": 1.0, "image_10KB.jpg": 10.0, "image_100KB.jpg": 100.0, "image_1000KB.jpg": 1024.0,
+    "img1.jpg":1.3, "img2.jpg":89.5, "img3.jpg":117.8, "img4.jpg":117.8, "img5.jpg":257.9,
+    "img10.jpg":466.8, "img24.jpg":753.5, "img48.jpg":999.7, "img50.jpg":970.7
+}
+CORE_PAYLOADS = {k: FULL_PAYLOAD_POOL[k] for k in ["image_1KB.jpg", "image_10KB.jpg", "image_100KB.jpg", "image_1000KB.jpg"]}
+
+# ==============================================================================
+# 2. LOGIQUE DE MESURE ET ANALYSE
+# ==============================================================================
+
+def log(msg, level="INFO"):
+    colors = {"INFO": "\033[94m", "SUCCESS": "\033[92m", "WARN": "\033[93m", "ERROR": "\033[91m", "BOLD": "\033[1m", "END": "\033[0m"}
+    print(f"{colors.get(level, '')}[{datetime.datetime.now().strftime('%H:%M:%S')}] {msg}{colors['END']}")
+
+def analyze_saturation(res, target_rps):
+    observed = res["observed_rps"]
+    cpu = res["node_cpu_avg_percent"]
+    bw = res["measured_gbps"]
+
+    if observed < (target_rps * 0.85):
+        if cpu >= THEO_CPU_LIMIT: return "SAT_CPU_LIMIT"
+        if bw >= THEO_BW_GBPS: return "SAT_BANDWIDTH_LIMIT"
+        return "SAT_SOFT_LIMIT (OS/TCP/JVM)"
+    return "None"
+
+def parse_wrk_output(output):
+    res = {"observed_rps": 0.0, "measured_gbps": 0.0, "latency_avg_ms": 0.0, "latency_p99_ms": 0.0, "errors_total": 0}
+    if m := re.search(r'Requests/sec:\s*([\d\.]+)', output): res["observed_rps"] = float(m.group(1))
+    if m := re.search(r'Transfer/sec:\s*([\d\.]+)([kKmMgG]?)B', output):
+        val, unit = float(m.group(1)), m.group(2).upper()
+        mult = {'G': 1e9, 'M': 1e6, 'K': 1e3, '': 1}
+        res["measured_gbps"] = (val * mult.get(unit, 1) * 8) / 1e9
+
+    # Latence Moyenne
+    if m := re.search(r'Latency\s+([\d\.]+)(\w+)', output):
+        val, unit = float(m.group(1)), m.group(2)
+        res["latency_avg_ms"] = val * 1000 if 's' == unit else val
+
+    # Latence P99
+    if m := re.search(r'99\.000%\s+([\d\.]+)(\w+)', output):
+        val, unit = float(m.group(1)), m.group(2)
+        res["latency_p99_ms"] = val * 1000 if 's' == unit else val
+
+    errs = re.findall(r'errors: [a-z ]+(\d+)', output)
+    res["errors_total"] = sum(map(int, errs)) if errs else 0
+    return res
+
+def execute_test(app_id, img_name, rate):
+    inter_ip = TOPOLOGY["intermediate"]["ip"]
+    lb_ip = TOPOLOGY["lb"]["ip"]
+    backend_hostname = TOPOLOGY["backend"]["hostname"]
+
+    url = f"http://{lb_ip}:8080{APPLICATIONS[app_id]['endpoint']}?machine={backend_hostname}&image={img_name}"
+
+    # Nettoyage logs CPU distants
+    subprocess.run([f"ssh {inter_ip} 'rm -f /tmp/cpu_measure.log'"], shell=True, stdout=subprocess.DEVNULL)
+
+    # Commande avec Keep-Alive explicite et chemin complet vers wrk
+    wrk_cmd = f"~/mesures/wrk2/wrk -t{WRK_THREADS} -c{WRK_CONNECTIONS} -d{MEASURE_SEC}s -R{rate} -H 'Connection: keep-alive' --latency --timeout {TIMEOUT} \"{url}\""
+    log(f"WRK EXEC: {wrk_cmd}", "INFO")
+
+    # Warmup
+    subprocess.run([f"~/mesures/wrk2/wrk -t{WRK_THREADS} -c{WRK_CONNECTIONS} -d{WARMUP_SEC}s -R{rate} \"{url}\""], shell=True, stdout=subprocess.DEVNULL)
+
+    # Mesure CPU (Parallèle sur les coeurs 0-3 via mpstat global puisque les autres sont off)
+    # On force LC_ALL=C pour avoir le point comme séparateur
+    cpu_proc = subprocess.Popen([f"ssh {inter_ip} 'LC_ALL=C mpstat {MEASURE_SEC} 1 | grep Average > /tmp/cpu_measure.log'"], shell=True)
+    wrk_run = subprocess.run([wrk_cmd], shell=True, capture_output=True, text=True)
+    cpu_proc.wait()
+
+    # Lecture CPU finale
+    cpu_out = subprocess.run([f"ssh {inter_ip} 'cat /tmp/cpu_measure.log'"], shell=True, capture_output=True, text=True)
+    try:
+        cpu_idle = float(cpu_out.stdout.split()[-1])
+        cpu_val = 100.0 - cpu_idle
+    except:
+        cpu_val = 0.0
+
+    data = parse_wrk_output(wrk_run.stdout)
+    data["node_cpu_avg_percent"] = cpu_val
+    return data
+
+# ==============================================================================
+# 3. GESTION DES SUITES DE TESTS
+# ==============================================================================
+
+def run_suite(payload_set, app_list, csv_filename):
+    tested = set()
+    if os.path.exists(csv_filename):
+        with open(csv_filename, 'r') as f:
+            reader = csv.DictReader(f)
+            for row in reader: tested.add((row["servlet_name"], row["image_name"], int(float(row["target_rps"]))))
+    else:
+        with open(csv_filename, 'w') as f:
+            csv.writer(f).writerow(["timestamp", "servlet_name", "image_name", "size_kb", "target_rps", "real_rps", "gbps", "lat_ms", "lat_p99_ms", "cpu", "reason"])
+
+    for img_name, img_size in payload_set.items():
+        for app_id in app_list:
+            log(f"RUNNING: {app_id} | IMAGE: {img_name} ({img_size}KB)", "BOLD")
+            strat = STRATEGY[app_id]["small" if img_size < 100 else "large"]
+            curr_rps = strat["start"]
+
+            while curr_rps <= strat["max"]:
+                if (app_id, img_name, curr_rps) in tested:
+                    curr_rps += strat["step"]; continue
+
+                res = execute_test(app_id, img_name, curr_rps)
+                reason = analyze_saturation(res, curr_rps)
+
+                color = "\033[92m" if reason == "None" else "\033[91m"
+                print(f"   {color}[RESULT] {res['observed_rps']:>6.0f}/{curr_rps:>6} RPS | {res['measured_gbps']:>6.3f} Gbps | {res['latency_avg_ms']:>6.2f} ms | CPU: {res['node_cpu_avg_percent']:>4.1f}% | Sat: {reason}\033[0m")
+
+                with open(csv_filename, 'a', newline='') as f:
+                    csv.writer(f).writerow([datetime.datetime.now().isoformat(), app_id, img_name, img_size, curr_rps, res["observed_rps"], res["measured_gbps"], res["latency_avg_ms"], res["latency_p99_ms"], res["node_cpu_avg_percent"], reason])
+
+                if reason != "None": break
+                curr_rps += strat["step"]
+
+# ==============================================================================
+# 4. GÉNÉRATION DES RÉSULTATS
+# ==============================================================================
+
+def generate_all_reports(mot_csv, odb_csv, rnd_csv):
+    log("GÉNÉRATION DES RAPPORTS FINAUX", "SUCCESS")
+
+    # 1 & 2. Graphes de Motivation
+    if os.path.exists(mot_csv):
+        df = pd.read_csv(mot_csv)
+        for metric, label, filename in [('cpu', 'CPU Usage (%)', 'motivation_cpu.png'), ('gbps', 'Throughput (Gbps)', 'motivation_gbps.png')]:
+            plt.figure(figsize=(10, 6))
+            for img in df['image_name'].unique():
+                sub = df[df['image_name'] == img].sort_values('target_rps')
+                plt.plot(sub['target_rps'], sub[metric], 'o-', label=f"{img} ({sub['size_kb'].iloc[0]}KB)")
+            plt.title(f"Motivation: {label} vs RPS (Standard Servlet)"); plt.ylabel(label); plt.xlabel("Target RPS")
+            plt.legend(); plt.grid(True); plt.savefig(filename); plt.close()
+
+    # 3. Graphe de comparaison de Latence
+    if os.path.exists(mot_csv) and os.path.exists(odb_csv):
+        df_all = pd.concat([pd.read_csv(mot_csv), pd.read_csv(odb_csv)])
+        sub = df_all[df_all['target_rps'] == FIXED_RPS_COMPARISON]
+        if not sub.empty:
+            plt.figure(figsize=(10, 6))
+            for app in sub['servlet_name'].unique():
+                d = sub[sub['servlet_name'] == app].sort_values('size_kb')
+                plt.plot(d['size_kb'], d['lat_ms'], 'o-', label=app)
+            plt.xscale('log'); plt.title(f"Comparison: Avg Latency at {FIXED_RPS_COMPARISON} RPS")
+            plt.ylabel("Latency (ms)"); plt.xlabel("Payload Size (KB) - Log Scale")
+            plt.legend(); plt.grid(True, which="both"); plt.savefig("latency_comparison.png"); plt.close()
+
+    # 4. Graphe Preuve Bypass (Max performance)
+    if os.path.exists(mot_csv) and os.path.exists(odb_csv):
+        df_all = pd.concat([pd.read_csv(mot_csv), pd.read_csv(odb_csv)])
+        # On prend le max RPS atteint pour chaque image de 1MB
+        sub = df_all[df_all['size_kb'] >= 1000].groupby('servlet_name')[['real_rps', 'cpu']].max()
+        if not sub.empty:
+            ax = sub['real_rps'].plot(kind='bar', figsize=(10,6), color='skyblue', label='Max RPS')
+            ax2 = sub['cpu'].plot(kind='line', secondary_y=True, color='red', marker='o', label='CPU at Max RPS')
+            plt.title("ODB Bypass Proof: Performance on 1MB payloads")
+            ax.set_ylabel("Max RPS reached"); ax2.set_ylabel("CPU Usage (%)")
+            plt.savefig("thesis_proof_bypass.png"); plt.close()
+
+    # 5. Synthèse Random Table
+    if os.path.exists(rnd_csv):
+        df_rnd = pd.read_csv(rnd_csv)
+        df_rnd.groupby(['servlet_name', 'image_name']).agg({
+            'real_rps': 'max',
+            'gbps': 'max',
+            'cpu': 'max',
+            'lat_ms': 'mean',
+            'lat_p99_ms': 'mean'
+        }).to_csv("results_random_table_synth.csv")
+
+# ==============================================================================
+# MAIN
+# ==============================================================================
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--mode', choices=['motivation', 'odb_test', 'random_table', 'all', 'report'], required=True)
+    args = parser.parse_args()
+
+    F_MOT, F_ODB, F_RND = "results_motivation.csv", "results_odb.csv", "results_random_table.csv"
+
+    if args.mode in ['motivation', 'all']:
+        run_suite(CORE_PAYLOADS, ["Serv"], F_MOT)
+    if args.mode in ['odb_test', 'all']:
+        run_suite(CORE_PAYLOADS, ["Serv-odb"], F_ODB)
+    if args.mode in ['random_table', 'all']:
+        # Sélection aléatoire de 5 images du pool
+        all_imgs = list(FULL_PAYLOAD_POOL.items())
+        rnd_imgs = dict(random.sample(all_imgs, min(5, len(all_imgs))))
+        run_suite(rnd_imgs, ["Serv", "Serv-odb"], F_RND)
+
+    if args.mode != 'none':
+        generate_all_reports(F_MOT, F_ODB, F_RND)
+        log("TOUS LES RÉSULTATS SONT GÉNÉRÉS.", "SUCCESS")
