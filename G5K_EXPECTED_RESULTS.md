@@ -29,6 +29,6 @@ After running `python3 run_benchmark_auto.py --mode all`, you should find the fo
 - `graph_motivation_gbps.png`: Shows the network throughput reaching the 10Gbps ceiling for large images in the baseline.
 
 ### ODB Performance Proofs
-- **`graph_efficiency_comparison.png`**: (Crucial Proof). Shows the CPU cost per 1000 requests. For ODB, this curve remains **flat and low**, proving that the CPU cost is independent of payload size. For standard Serv, the cost **increases** with image size.
+- **`graph_efficiency.png`**: (Crucial Proof). Shows the CPU cost per 1000 requests. For ODB, this curve remains **flat and low**, proving that the CPU cost is independent of payload size. For standard Serv, the cost **increases** with image size.
 - **`graph_odb_speedup.png`**: A bar chart showing the speedup factor of ODB over the baseline. Speedup should be massive for 1MB images.
-- **`graph_latency_full.png`**: Compares the average and P99 latency. ODB maintains much lower and more stable latency than the baseline as payload size increases.
+- **`graph_latency_fixed.png`**: Compares the average and P99 latency at a fixed RPS. ODB maintains much lower and more stable latency than the baseline as payload size increases.

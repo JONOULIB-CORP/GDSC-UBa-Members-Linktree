@@ -20,7 +20,7 @@ MEASURE_SEC          = 30
 WRK_THREADS          = 12
 WRK_CONNECTIONS      = 400
 TIMEOUT              = "15s"
-FIXED_RPS_COMPARISON = 1000
+FIXED_RPS_COMPARISON = 1000  # Point de comparaison commun pour la latence
 
 # Seuils de diagnostic scientifique
 THEO_BW_GBPS         = 9.4
@@ -132,7 +132,6 @@ def execute_test(app_id, img_name, rate):
 # ==============================================================================
 
 def run_suite(payload_set, app_list, csv_filename):
-    # Chargement de l'historique pour la reprise automatique
     history = {}
     if os.path.exists(csv_filename):
         with open(csv_filename, 'r') as f:
@@ -170,12 +169,10 @@ def run_suite(payload_set, app_list, csv_filename):
                         saturated_at = h["target"]
 
             for curr_rps in rps_to_test:
-                # Si déjà testé, on passe
-                if curr_rps in tested_rps:
-                    continue
+                if curr_rps in tested_rps: continue
 
-                # Si le système était déjà saturé à un RPS inférieur, on arrête (Stop Intelligent)
-                # Exception : on teste quand même le FIXED_RPS_COMPARISON s'il n'a pas été fait
+                # Stop Intelligent : On saute les RPS supérieurs au point de saturation
+                # EXCEPTION : On teste quand même le point fixe s'il n'est pas encore fait
                 if saturated_at and curr_rps > saturated_at and curr_rps != FIXED_RPS_COMPARISON:
                     log(f"   Skipping {curr_rps} RPS (System already saturated at {saturated_at})", "WARN")
                     continue
@@ -189,7 +186,6 @@ def run_suite(payload_set, app_list, csv_filename):
                 with open(csv_filename, 'a', newline='') as f:
                     csv.writer(f).writerow([datetime.datetime.now().isoformat(), app_id, img_name, img_size, curr_rps, res["observed_rps"], res["measured_gbps"], res["latency_avg_ms"], res["latency_p99_ms"], res["node_cpu_avg_percent"], reason])
 
-                # Mise à jour du point de saturation pour le stop intelligent
                 if reason != "None":
                     saturated_at = curr_rps
                     log(f"   Saturation reached for {img_name} at {curr_rps} RPS.", "SUCCESS")
@@ -208,18 +204,7 @@ def generate_all_reports(mot_csv, odb_csv, rnd_csv):
     if not all_files: return
     df_all = pd.concat([pd.read_csv(f) for f in all_files]).drop_duplicates(subset=['servlet_name', 'image_name', 'target_rps'])
 
-    # 1. Motivation: CPU & Gbps vs RPS (Standard)
-    df_mot = df_all[df_all['servlet_name'] == 'Serv']
-    if not df_mot.empty:
-        for metric, label, filename in [('cpu', 'CPU Usage (%)', 'graph_motivation_cpu.png'), ('gbps', 'Throughput (Gbps)', 'graph_motivation_gbps.png')]:
-            plt.figure(figsize=(10, 6))
-            for img in df_mot['image_name'].unique():
-                sub = df_mot[df_mot['image_name'] == img].sort_values('target_rps')
-                plt.plot(sub['target_rps'], sub[metric], 'o-', label=f"{img} ({sub['size_kb'].iloc[0]}KB)")
-            plt.title(f"Standard Servlet Bottleneck: {label} vs RPS"); plt.ylabel(label); plt.xlabel("Target RPS")
-            plt.legend(); plt.grid(True); plt.savefig(filename); plt.close()
-
-    # 2. ODB Efficiency: CPU Cost per Request (CPU% / 1k RPS)
+    # 1. Efficiency: CPU Cost per Request (CPU% / 1k RPS)
     plt.figure(figsize=(10, 6))
     for app in df_all['servlet_name'].unique():
         sub = df_all[(df_all['servlet_name'] == app) & (df_all['real_rps'] > 100)]
@@ -227,26 +212,18 @@ def generate_all_reports(mot_csv, odb_csv, rnd_csv):
         sub['cpu_cost'] = sub['cpu'] / (sub['real_rps'] / 1000.0)
         summary = sub.groupby('size_kb')['cpu_cost'].mean().sort_index()
         plt.plot(summary.index, summary.values, 'o-', label=f"{app} Efficiency")
-    plt.xscale('log'); plt.title("Scientific Proof: CPU Efficiency vs Payload Size")
-    plt.ylabel("CPU % cost per 1000 RPS"); plt.xlabel("Payload Size (KB) - Log Scale")
-    plt.legend(); plt.grid(True, which="both"); plt.savefig("graph_efficiency_comparison.png"); plt.close()
+    plt.xscale('log'); plt.title("ODB Proof: CPU Efficiency (Cost per 1k RPS)"); plt.ylabel("CPU % per 1000 RPS"); plt.xlabel("Payload Size (KB)"); plt.legend(); plt.grid(True, which="both"); plt.savefig("graph_efficiency.png"); plt.close()
 
-    # 3. ODB Speedup: RPSmax_ODB / RPSmax_Serv
+    # 2. ODB Speedup
     max_rps = df_all.groupby(['servlet_name', 'size_kb'])['real_rps'].max().unstack(level=0)
     if 'Serv' in max_rps.columns and 'Serv-odb' in max_rps.columns:
         speedup = max_rps['Serv-odb'] / max_rps['Serv']
         plt.figure(figsize=(10, 6))
         speedup.sort_index().plot(kind='bar', color='green', alpha=0.7)
-        plt.title("ODB Speedup Factor (Max RPS Ratio)"); plt.ylabel("Speedup (x)"); plt.xlabel("Payload Size (KB)")
-        plt.axhline(y=1.0, color='r', linestyle='--')
-        plt.savefig("graph_odb_speedup.png"); plt.close()
+        plt.title("ODB Speedup Factor (Max RPS Ratio)"); plt.ylabel("Speedup (x)"); plt.axhline(y=1.0, color='r', linestyle='--'); plt.savefig("graph_odb_speedup.png"); plt.close()
+        max_rps[['Serv', 'Serv-odb']].assign(speedup=speedup).to_csv("results_comparison_max_rps.csv")
 
-        # 6. CSV de comparaison Max RPS (Bypass Proof)
-        comparison = max_rps[['Serv', 'Serv-odb']].copy()
-        comparison['speedup'] = comparison['Serv-odb'] / comparison['Serv']
-        comparison.to_csv("results_comparison_max_rps.csv")
-
-    # 4. Latency Comparison
+    # 3. Latency at Fixed RPS
     sub_lat = df_all[df_all['target_rps'] == FIXED_RPS_COMPARISON]
     if not sub_lat.empty:
         plt.figure(figsize=(10, 6))
@@ -254,40 +231,18 @@ def generate_all_reports(mot_csv, odb_csv, rnd_csv):
             d = sub_lat[sub_lat['servlet_name'] == app].sort_values('size_kb')
             plt.plot(d['size_kb'], d['lat_ms'], 's-', label=f"{app} (Avg)")
             plt.plot(d['size_kb'], d['lat_p99_ms'], 'x--', label=f"{app} (P99)", alpha=0.5)
-        plt.xscale('log'); plt.title(f"Latency Stability at {FIXED_RPS_COMPARISON} RPS")
-        plt.ylabel("Latency (ms)"); plt.xlabel("Payload Size (KB)")
-        plt.legend(); plt.grid(True, which="both"); plt.savefig("graph_latency_full.png"); plt.close()
-
-    # 5. Synthèse Random Table
-    if os.path.exists(rnd_csv):
-        df_rnd = pd.read_csv(rnd_csv)
-        df_rnd.groupby(['servlet_name', 'image_name']).agg({
-            'real_rps': 'max',
-            'gbps': 'max',
-            'cpu': 'max',
-            'lat_ms': 'mean',
-            'lat_p99_ms': 'mean'
-        }).to_csv("results_random_table_synth.csv")
+        plt.xscale('log'); plt.title(f"Latency Stability at {FIXED_RPS_COMPARISON} RPS"); plt.ylabel("Latency (ms)"); plt.legend(); plt.grid(True, which="both"); plt.savefig("graph_latency_fixed.png"); plt.close()
 
 # ==============================================================================
 # MAIN
 # ==============================================================================
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--mode', choices=['motivation', 'odb_test', 'random_table', 'all', 'report'], required=True)
-    args = parser.parse_args()
-
+    parser = argparse.ArgumentParser(); parser.add_argument('--mode', choices=['motivation', 'odb_test', 'random_table', 'all', 'report'], required=True); args = parser.parse_args()
     F_MOT, F_ODB, F_RND = "results_motivation.csv", "results_odb.csv", "results_random_table.csv"
-
-    if args.mode in ['motivation', 'all']:
-        run_suite(CORE_PAYLOADS, ["Serv"], F_MOT)
-    if args.mode in ['odb_test', 'all']:
-        run_suite(CORE_PAYLOADS, ["Serv-odb"], F_ODB)
+    if args.mode in ['motivation', 'all']: run_suite(CORE_PAYLOADS, ["Serv"], F_MOT)
+    if args.mode in ['odb_test', 'all']: run_suite(CORE_PAYLOADS, ["Serv-odb"], F_ODB)
     if args.mode in ['random_table', 'all']:
-        all_imgs = list(FULL_PAYLOAD_POOL.items())
-        rnd_imgs = dict(random.sample(all_imgs, min(5, len(all_imgs))))
+        rnd_imgs = dict(random.sample(list(FULL_PAYLOAD_POOL.items()), min(5, len(FULL_PAYLOAD_POOL))))
         run_suite(rnd_imgs, ["Serv", "Serv-odb"], F_RND)
-
-    if args.mode != 'none':
-        generate_all_reports(F_MOT, F_ODB, F_RND)
-        log("MESURES TERMINÉES ET GRAPHES GÉNÉRÉS.", "SUCCESS")
+    generate_all_reports(F_MOT, F_ODB, F_RND)
+    log("TERMINE.", "SUCCESS")

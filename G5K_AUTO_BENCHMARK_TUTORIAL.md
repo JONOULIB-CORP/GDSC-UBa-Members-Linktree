@@ -48,7 +48,7 @@ python3 run_benchmark_auto.py --mode all
 ## 4. Features of the Script
 
 - **Automatic Resume**: If the script is interrupted, it reads the CSV files and continues from where it left off.
-- **Intelligent Stop**: For each payload, the script stops increasing the RPS as soon as saturation (CPU, Bandwidth, or Latency) is detected.
+- **Intelligent Stop**: For each payload, the script stops increasing the RPS as soon as saturation (CPU, Bandwidth, or Latency) is detected. It intelligently ensures that the `FIXED_RPS_COMPARISON` point is always measured for the graphs.
 - **Log Cleanup**: Remote temporary logs on M3 are automatically cleaned up between tests.
 - **Coherent Steps**: Steps are designed to ensure the `max` RPS value is always tested if saturation hasn't been reached yet.
 - **Explicit Diagnosis**: Each result is labeled with a scientific reason if saturation occurs (e.g., `SAT_CPU`, `SAT_BW`).
