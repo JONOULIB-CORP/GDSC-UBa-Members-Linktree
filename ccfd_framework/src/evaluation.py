@@ -19,7 +19,7 @@ class BuggyCCFD(MockCCFD):
 
 def run_evaluation():
     print("Starting Evaluation...")
-    n_runs = 50
+    n_runs = 100
     results = []
 
     generator = TestGenerator()
@@ -50,7 +50,7 @@ def run_evaluation():
     # 3. Hybrid Optimized Testing (Our Framework)
     print("Running Hybrid Optimized Testing...")
     # Use a customized optimizer for evaluation
-    optimizer = GeneticOptimizer(profile=0, pop_size=50, n_generations=20, sut=sut)
+    optimizer = GeneticOptimizer(profile=0, pop_size=100, n_generations=50, sut=sut)
     best_seq = optimizer.optimize()
     # Test the best sequence multiple times to account for randomness in BuggyCCFD
     hybrid_violations = 0
