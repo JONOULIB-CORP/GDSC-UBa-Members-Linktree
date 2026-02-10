@@ -44,15 +44,18 @@ sudo-g5k sysctl -w net.ipv4.tcp_max_syn_backlog=1024
 ## 3. M3 Application Tuning (Tomcat)
 Ensure Tomcat is not throttling itself before the CPU hits 100%.
 
-### Thread Pool (`conf/server.xml`)
-Increase `maxThreads` to ensure we don't block on the application level during proxying.
+### Thread Pool & Accept Queue (`conf/server.xml`)
+Increase `maxThreads` and `acceptCount` to ensure we don't block during high-pressure saturation tests.
 ```xml
 <Connector port="8080" protocol="HTTP/1.1"
            connectionTimeout="20000"
            maxThreads="1000"
            minSpareThreads="100"
+           acceptCount="1000"
            redirectPort="8443" />
 ```
+
+**Note on Saturation**: Since Keep-Alive makes each request more efficient (less CPU overhead), you will need a higher RPS (e.g. >35,000) to reach 100% CPU compared to the non-persistent setup.
 
 ### Disable Logging
 I/O wait for access logs can artificially lower CPU usage.

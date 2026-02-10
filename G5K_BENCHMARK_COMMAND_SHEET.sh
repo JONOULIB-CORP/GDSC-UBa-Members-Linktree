@@ -91,9 +91,13 @@ sudo-g5k systemctl restart nginx
 # Target: M2 (LB)
 # Parameter 'machine': M4 (Final Server)
 
-# Test 1: Small Image (1KB) - Goal: Saturation RPS (CPU Bound on M3)
-# Note: uses -R (rate) from wrk2
-~/mesures/wrk2/wrk -t12 -c200 -d30s -R2000 --latency \
+# Test 1: Small Image (1KB) - Goal: Observed Performance
+~/mesures/wrk2/wrk -t12 -c400 -d30s -R25000 --latency \
+"http://<IP_M2>:8080/serv/Serv?machine=<IP_M4>&image=small.jpg"
+
+# Test 1 bis: SATURATION MODE (Goal: 100% CPU on M3)
+# Increase rate and connections to push M3 to its limit
+~/mesures/wrk2/wrk -t32 -c1000 -d60s -R40000 --timeout 15s --latency \
 "http://<IP_M2>:8080/serv/Serv?machine=<IP_M4>&image=small.jpg"
 
 # Test 2: Large Image (1MB) - Goal: Saturation Bandwidth (I/O Bound)

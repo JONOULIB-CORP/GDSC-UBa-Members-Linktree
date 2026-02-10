@@ -58,5 +58,16 @@ Sans Keep-Alive entre M2 et M3 :
 
 ---
 
+## 5. Le Paradoxe de l'Efficacité
+
+Si après avoir activé le **Keep-Alive**, vous observez que le RPS augmente mais que le CPU moyen diminue (ex: de 5%), c'est une excellente nouvelle technique, mais un défi pour votre test de saturation.
+
+### Pourquoi le CPU baisse alors que le débit augmente ?
+1. **Élimination du travail inutile** : Sans Keep-Alive, le CPU de M3 gaspillait 10 à 15% de ses cycles uniquement pour ouvrir et fermer des sockets TCP.
+2. **Gain d'efficience** : Maintenant, 100% du travail CPU est dédié au traitement des images. Chaque requête "coûte" moins de cycles CPU qu'avant.
+3. **Besoin de plus de charge** : Pour atteindre 100% CPU avec ce système plus efficace, vous devez augmenter la pression. Si vous étiez à 88% CPU pour 24 000 RPS avec l'ancien système "inefficace", il vous faudra peut-être 35 000 ou 40 000 RPS pour saturer les 4 cœurs maintenant.
+
+---
+
 ## Conclusion Scientifique
-"Le passage d'images de 1KB à 1MB déplace le goulot d'étranglement de la **Logique de Calcul** vers la **Logique de Transfert**. L'ajout d'un 4ème nœud (Load Balancer) introduit une **Taxe de Connexion** qui peut diviser par deux les performances si les connexions persistantes (Keep-Alive) ne sont pas activées de bout en bout."
+"L'ajout d'un 4ème nœud introduit une taxe TCP massive qui sature le système prématurément. L'optimisation par Keep-Alive supprime cette taxe, rendant le système plus efficace (plus de RPS pour moins de CPU). Pour observer une **surcharge** (saturation à 100%), il faut alors pousser le débit (RPS) et la concurrence jusqu'à ce que la puissance de calcul pure devienne à nouveau le goulot d'étranglement."
