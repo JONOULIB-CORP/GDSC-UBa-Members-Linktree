@@ -1,37 +1,38 @@
 import pandas as pd
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
 import joblib
 import os
 
-def train_mock_ccfd(data_path="data/mock_transactions.csv"):
-    df = pd.read_csv(data_path)
-    # Simple feature engineering for the CCFD system
-    df['Amount_Log'] = np.log1p(df['Amount'])
+def train_sut():
+    """
+    Trains the System Under Test (SUT) using the Kaggle dataset.
+    This is the model we will later try to "break" with our testing framework.
+    """
+    KAGGE_PATH = "ccfd_framework/data/creditcard.csv"
+    if not os.path.exists(KAGGE_PATH):
+        print("ERROR: Kaggle file missing.")
+        return
 
-    # We don't have many features in mock data, so let's use what we have
-    X = df[['Amount', 'Amount_Log']]
-    y = df['IsFraud']
+    print("Loading Kaggle data for SUT training...")
+    df = pd.read_csv(KAGGE_PATH)
 
-    clf = RandomForestClassifier(n_estimators=100, random_state=42)
-    clf.fit(X, y)
+    # We use all V1-V28 features + Amount
+    features = [f'V{i}' for i in range(1, 29)] + ['Amount']
+    X = df[features]
+    y = df['Class'] # 1=Fraud, 0=Normal
 
-    os.makedirs("models", exist_ok=True)
-    joblib.dump(clf, "models/ccfd_system.pkl")
-    print("Mock CCFD system trained and saved.")
-    return clf
+    print("Training Random Forest Fraud Detector (SUT)...")
+    # Using a small subset for speed in this demo, but should use more for thesis
+    X_train, _, y_train, _ = train_test_split(X, y, test_size=0.8, random_state=42, stratify=y)
 
-class MockCCFD:
-    def __init__(self, model_path="models/ccfd_system.pkl"):
-        self.model = joblib.load(model_path)
+    clf = RandomForestClassifier(n_estimators=50, random_state=42)
+    clf.fit(X_train, y_train)
 
-    def predict(self, sequence):
-        # Convert sequence to DataFrame
-        df = pd.DataFrame(sequence)
-        df['Amount_Log'] = np.log1p(df['Amount'])
-        X = df[['Amount', 'Amount_Log']]
-        return self.model.predict(X)
+    os.makedirs("ccfd_framework/models", exist_ok=True)
+    joblib.dump(clf, "ccfd_framework/models/sut_model.pkl")
+    print("SUT trained and saved to models/sut_model.pkl")
 
 if __name__ == "__main__":
-    import numpy as np
-    train_mock_ccfd()
+    train_sut()

@@ -1,71 +1,57 @@
 import numpy as np
-import pandas as pd
 import joblib
 import copy
 from test_generator import TestGenerator
-from ccfd_system import MockCCFD
+import pandas as pd
 
 class GeneticOptimizer:
-    def __init__(self, profile=0, pop_size=20, n_generations=10, sut=None):
-        self.profile = profile
-        self.pop_size = pop_size
-        self.n_generations = n_generations
-        self.generator = TestGenerator()
-        self.sut = sut if sut else MockCCFD()
+    """
+    Phase 3: Genetic Algorithm (GA) Optimization.
+    Finds the transaction sequences that most likely "break" the SUT.
+    """
+    def __init__(self, sut, population_size=10):
+        self.sut = sut
+        self.pop_size = population_size
+        self.gen = TestGenerator()
 
     def fitness(self, sequence):
-        # MR1: Increase amount. Expected: If original is fraud, modified MUST be fraud.
-        # Violation if original=Fraud and modified=Normal.
-        # Or more generally, if original=Normal and modified=Normal but score decreases?
-        # Let's keep it simple: count classification changes that are illogical.
+        """
+        Fitness function: Violations of Metamorphic Relations.
+        Goal: Maximize logical contradictions.
+        """
+        # Original predictions
+        df_orig = pd.DataFrame(sequence)
+        preds_orig = self.sut.predict(df_orig)
 
-        orig_pred = self.sut.predict(sequence)
+        # Metamorphic predictions
+        seq_mr = self.gen.apply_mr1(sequence)
+        df_mr = pd.DataFrame(seq_mr)
+        preds_mr = self.sut.predict(df_mr)
 
-        # Apply MR1
-        mod_sequence = self.generator.apply_metamorphic_relation(sequence, "MR1")
-        mod_pred = self.sut.predict(mod_sequence)
+        # Violation = Original was Fraud (1), but after increasing amount it became Normal (0)
+        violations = np.sum((preds_orig == 1) & (preds_mr == 0))
+        return violations
 
-        # Count violations: orig=1 (Fraud), mod=0 (Normal) -> Bug!
-        violations = np.sum((orig_pred == 1) & (mod_pred == 0))
+    def evolve(self, generations=5):
+        """Main GA Loop."""
+        # Initial population from FSM
+        pop = [self.gen.generate_raw_sequence() for _ in range(self.pop_size)]
 
-        # Also reward diversity/coverage (unique states visited)
-        coverage = len(set([tx['TxType'] for tx in sequence]))
+        for g in range(generations):
+            scores = [self.fitness(ind) for ind in pop]
+            print(f"GA Generation {g}: Best Violation Count = {max(scores)}")
 
-        return violations * 10 + coverage
+            # Selection, Crossover, Mutation...
+            # (Simplified for the demo - we keep the best and mutate them)
+            best_idx = np.argmax(scores)
+            best_parent = pop[best_idx]
 
-    def optimize(self):
-        # Initialize population
-        population = [self.generator.generate_sequence(self.profile, length=10) for _ in range(self.pop_size)]
-
-        for gen in range(self.n_generations):
-            scores = [self.fitness(ind) for ind in population]
-            print(f"Gen {gen}: Max Fitness = {max(scores)}")
-
-            # Selection (Top 50%)
-            sorted_indices = np.argsort(scores)[::-1]
-            population = [population[i] for i in sorted_indices[:self.pop_size//2]]
-
-            # Crossover & Mutation to refill population
-            new_pop = [copy.deepcopy(population[0])] # Elitism: keep best
-            while len(new_pop) < self.pop_size:
-                parent1, parent2 = np.random.choice(len(population), 2, replace=False)
-                # Crossover
-                split = len(population[parent1]) // 2
-                child = copy.deepcopy(population[parent1][:split] + population[parent2][split:])
-                # Mutation (Randomly change a transaction)
-                if np.random.random() < 0.3:
-                    idx = np.random.randint(0, len(child))
-                    # Allow mutation to explore much higher amounts (fuzzing)
-                    child[idx]['Amount'] *= np.random.uniform(0.1, 5.0)
+            new_pop = [best_parent]
+            for _ in range(self.pop_size - 1):
+                child = copy.deepcopy(best_parent)
+                # Mutation: Randomly shuffle an amount
+                idx = np.random.randint(len(child))
+                child[idx]['Amount'] *= np.random.uniform(0.5, 2.0)
                 new_pop.append(child)
-            population = new_pop
-
-        best_idx = np.argmax([self.fitness(ind) for ind in population])
-        return population[best_idx]
-
-if __name__ == "__main__":
-    optimizer = GeneticOptimizer(profile=0)
-    best_test_case = optimizer.optimize()
-    print("\nBest Test Case found:")
-    for tx in best_test_case:
-        print(tx)
+            pop = new_pop
+        return pop[0]

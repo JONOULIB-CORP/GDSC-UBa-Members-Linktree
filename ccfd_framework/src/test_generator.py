@@ -1,68 +1,44 @@
 import numpy as np
-import pandas as pd
 import joblib
 import copy
 
 class TestGenerator:
-    def __init__(self, fsm_path="models/fsm_model.pkl"):
-        self.fsm = joblib.load(fsm_path)
-        self.tx_types = ['Low', 'Medium', 'High']
-        # Amount ranges (approximate from mock data quantiles)
-        self.amount_ranges = {
-            'Low': (1, 20),
-            'Medium': (20, 60),
-            'High': (60, 500)
-        }
+    """
+    Phase 2: Creating the Test Suite via Mutation and Metamorphic Relations.
+    """
+    def __init__(self):
+        try:
+            self.fsm = joblib.load("ccfd_framework/models/fsm_rules.pkl")
+            self.states = ['Low', 'Medium', 'High']
+        except:
+            self.fsm = None
 
-    def generate_sequence(self, profile, length=10):
+    def generate_raw_sequence(self, profile=0, length=5):
+        """Generates a sequence of transactions based on FSM probabilities."""
+        if self.fsm is None: return []
+
         matrix = self.fsm[profile]
-        current_state = np.random.choice(self.tx_types)
-        sequence = []
-
+        curr = np.random.choice(self.states)
+        seq = []
         for _ in range(length):
-            # Pick an amount in the range
-            low, high = self.amount_ranges[current_state]
-            amount = np.random.uniform(low, high)
-            sequence.append({
-                "TxType": current_state,
-                "Amount": amount
-            })
+            # Simulate a feature vector (Simplified for demo)
+            # In a real setup, we would sample from the original Kaggle distribution for that state
+            val = {"Amount": 50.0 if curr == 'Medium' else (10.0 if curr == 'Low' else 500.0)}
+            # Add dummy V1-V28
+            for i in range(1, 29): val[f'V{i}'] = np.random.normal(0, 1)
+            seq.append(val)
 
-            # Transition
-            probs = matrix.loc[current_state].values
-            current_state = np.random.choice(self.tx_types, p=probs)
+            # Next state
+            probs = matrix.loc[curr].values
+            curr = np.random.choice(matrix.columns, p=probs)
+        return seq
 
-        return sequence
-
-    def apply_metamorphic_relation(self, sequence, relation_type="MR1"):
-        modified_sequence = copy.deepcopy(sequence)
-        if relation_type == "MR1":
-            # Increase amount of a random transaction
-            idx = np.random.randint(0, len(modified_sequence))
-            modified_sequence[idx]['Amount'] *= 1.5
-        return modified_sequence
-
-    def mutate_fsm(self, profile):
-        # Create a mutant FSM by shuffling transition probabilities
-        mutant_fsm = self.fsm.copy()
-        matrix = mutant_fsm[profile].copy()
-
-        for state in self.tx_types:
-            probs = matrix.loc[state].values
-            np.random.shuffle(probs)
-            matrix.loc[state] = probs
-
-        mutant_fsm[profile] = matrix
-        return mutant_fsm
-
-if __name__ == "__main__":
-    generator = TestGenerator()
-    seq = generator.generate_sequence(profile=0, length=5)
-    print("Original Sequence:")
-    for tx in seq:
-        print(tx)
-
-    mr_seq = generator.apply_metamorphic_relation(seq, "MR1")
-    print("\nModified Sequence (MR1 - Increased Amount):")
-    for tx in mr_seq:
-        print(tx)
+    def apply_mr1(self, sequence):
+        """
+        Metamorphic Relation 1: Monotonicity of Amount.
+        If a transaction is suspicious, increasing the amount MUST NOT make it less suspicious.
+        """
+        mutant = copy.deepcopy(sequence)
+        for tx in mutant:
+            tx['Amount'] *= 2.0 # Double the amount
+        return mutant

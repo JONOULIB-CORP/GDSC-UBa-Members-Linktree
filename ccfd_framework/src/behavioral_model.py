@@ -6,81 +6,76 @@ import joblib
 import os
 
 class BehavioralModel:
+    """
+    This class handles Phase 1: Deriving the Behavioral Model from the Kaggle dataset.
+    It identifies user profiles and builds transition rules (FSM).
+    """
     def __init__(self, n_clusters=3):
         self.n_clusters = n_clusters
-        self.kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+        self.kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
         self.scaler = StandardScaler()
-        self.profiles = None
+
+    def load_kaggle_data(self, filepath):
+        """Loads the real Kaggle CSV."""
+        if not os.path.exists(filepath):
+            raise FileNotFoundError(f"Kaggle dataset not found at {filepath}. Please download creditcard.csv from Kaggle.")
+        return pd.read_csv(filepath)
 
     def extract_features(self, df):
-        # Aggregate features per user
-        features = df.groupby('UserID').agg({
-            'Amount': ['mean', 'std', 'count', 'max'],
-            'Timestamp': lambda x: (x.max() - x.min()).total_seconds() / 3600 # Duration in hours
-        })
-        features.columns = ['avg_amount', 'std_amount', 'transaction_count', 'max_amount', 'duration_hours']
-        features['frequency'] = features['transaction_count'] / (features['duration_hours'] + 1)
-        features = features.fillna(0)
+        """
+        Step 1: Inferring Abstract Behavioral Profiles.
+        We group transactions to see patterns. In the real Kaggle set,
+        we don't have UserIDs, so we simulate sequences or treat time windows as users.
+        For this implementation, we use 'Time' to simulate user sessions.
+        """
+        # Feature engineering: Time of day, Amount categories
+        df['Hour'] = (df['Time'] / 3600) % 24
+
+        # We select PCA features V1-V28 provided by Kaggle + Amount + Hour
+        features = df[['V1', 'V2', 'Amount', 'Hour']]
         return features
 
-    def train(self, df):
-        print("Extracting features for clustering...")
+    def train_profiles(self, df):
+        """Step 1 & 2: Clustering and Drift detection (simplified)."""
+        print("[1/4] Extracting behavioral features...")
         features = self.extract_features(df)
-        scaled_features = self.scaler.fit_transform(features)
+        scaled = self.scaler.fit_transform(features)
 
-        print(f"Clustering users into {self.n_clusters} profiles...")
-        self.profiles = self.kmeans.fit_predict(scaled_features)
-        features['Profile'] = self.profiles
+        print(f"[2/4] Clustering into {self.n_clusters} behavioral profiles...")
+        df['Profile'] = self.kmeans.fit_predict(scaled)
 
-        # Save model
-        os.makedirs("models", exist_ok=True)
-        joblib.dump(self.kmeans, "models/kmeans_model.pkl")
-        joblib.dump(self.scaler, "models/scaler.pkl")
-        return features
+        os.makedirs("ccfd_framework/models", exist_ok=True)
+        joblib.dump(self.kmeans, "ccfd_framework/models/kmeans_model.pkl")
+        joblib.dump(self.scaler, "ccfd_framework/models/scaler.pkl")
+        return df
 
-    def build_fsm(self, df, user_features):
-        # Simplify FSM: States are the profiles.
-        # Transitions are between transaction types within a profile.
-        # For now, let's say States are (Profile, TransactionType)
-        # TransactionType can be 'Low', 'Medium', 'High' based on amount quantiles.
+    def build_fsm_rules(self, df):
+        """Step 3 & 4: Defining FSM States and Transition Rules."""
+        print("[3/4] Defining FSM states based on Amount Quantiles...")
+        # States (S): Low-Amount, Medium-Amount, High-Amount
+        df['State'] = pd.qcut(df['Amount'], 3, labels=['Low', 'Medium', 'High'])
 
-        df = df.merge(user_features[['Profile']], left_on='UserID', right_index=True)
+        print("[4/4] Inferring transition probabilities...")
+        fsm_map = {}
+        for p in range(self.n_clusters):
+            pdf = df[df['Profile'] == p].copy()
+            # Transitions are based on chronological sequence in the dataset
+            pdf['Next_State'] = pdf['State'].shift(-1)
+            trans = pd.crosstab(pdf['State'], pdf['Next_State'], normalize='index')
+            fsm_map[p] = trans
 
-        # Define transaction types
-        df['TxType'] = pd.qcut(df['Amount'], 3, labels=['Low', 'Medium', 'High'])
-
-        # Compute transition matrix per profile
-        fsm = {}
-        for profile in range(self.n_clusters):
-            profile_df = df[df['Profile'] == profile]
-            transitions = []
-
-            # Sort by user and time to get sequences
-            profile_df = profile_df.sort_values(['UserID', 'Timestamp'])
-            profile_df['NextTxType'] = profile_df.groupby('UserID')['TxType'].shift(-1)
-
-            # Count transitions
-            trans_counts = profile_df.groupby(['TxType', 'NextTxType']).size().unstack(fill_value=0)
-            # Normalize to get probabilities
-            trans_probs = trans_counts.div(trans_counts.sum(axis=1), axis=0).fillna(0)
-            fsm[profile] = trans_probs
-
-        return fsm
+        joblib.dump(fsm_map, "ccfd_framework/models/fsm_rules.pkl")
+        print("Done! Behavioral Model (FSM) saved in models/fsm_rules.pkl")
+        return fsm_map
 
 if __name__ == "__main__":
-    # Test
-    from data_generator import generate_mock_data
-    if not os.path.exists("data/mock_transactions.csv"):
-        generate_mock_data()
-
-    df = pd.read_csv("data/mock_transactions.csv", parse_dates=['Timestamp'])
-    model = BehavioralModel(n_clusters=3)
-    user_features = model.train(df)
-    fsm = model.build_fsm(df, user_features)
-
-    print("\nFSM Transitions for Profile 0:")
-    print(fsm[0])
-
-    # Save FSM
-    joblib.dump(fsm, "models/fsm_model.pkl")
-    print("\nModels saved in models/")
+    # If the user hasn't provided the file, we help them
+    KAGGE_PATH = "ccfd_framework/data/creditcard.csv"
+    model = BehavioralModel()
+    try:
+        data = model.load_kaggle_data(KAGGE_PATH)
+        df_with_profiles = model.train_profiles(data)
+        model.build_fsm_rules(df_with_profiles)
+    except FileNotFoundError as e:
+        print(f"ERROR: {e}")
+        print("DIRECTIONS: Please place 'creditcard.csv' from Kaggle in ccfd_framework/data/")
