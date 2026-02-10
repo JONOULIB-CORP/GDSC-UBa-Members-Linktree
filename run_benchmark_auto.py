@@ -132,6 +132,7 @@ def execute_test(app_id, img_name, rate):
 # ==============================================================================
 
 def run_suite(payload_set, app_list, csv_filename):
+    # Chargement de l'historique pour la reprise automatique
     history = {}
     if os.path.exists(csv_filename):
         with open(csv_filename, 'r') as f:
@@ -152,22 +153,33 @@ def run_suite(payload_set, app_list, csv_filename):
             log(f"SUITE: {app_id} | IMAGE: {img_name} ({img_size}KB)", "BOLD")
             strat = STRATEGY[app_id]["small" if img_size < 100 else "large"]
 
-            last_rps = 0
-            saturated = False
+            # 1. Génération de la liste des RPS à tester (inclut le point de comparaison fixe)
+            rps_to_test = [FIXED_RPS_COMPARISON]
+            rps_to_test += list(range(strat["start"], strat["max"] + 1, strat["step"]))
+            if rps_to_test[-1] < strat["max"]:
+                rps_to_test.append(strat["max"])
+            rps_to_test = sorted(list(set(rps_to_test)))
+
+            # 2. Filtrage pour la reprise (History)
+            tested_rps = set()
+            saturated_at = None
             if (app_id, img_name) in history:
-                h = history[(app_id, img_name)]
-                last_rps = max([x["target"] for x in h])
-                saturated = any([x["reason"] != "None" for x in h])
-                if saturated:
-                    log(f"   Skipping {app_id}/{img_name} (Already saturated in history)", "WARN")
+                for h in history[(app_id, img_name)]:
+                    tested_rps.add(h["target"])
+                    if h["reason"] != "None":
+                        saturated_at = h["target"]
+
+            for curr_rps in rps_to_test:
+                # Si déjà testé, on passe
+                if curr_rps in tested_rps:
                     continue
 
-            curr_rps = strat["start"]
-            if last_rps >= curr_rps:
-                curr_rps = last_rps + strat["step"]
-                log(f"   Resuming from {curr_rps} RPS", "INFO")
+                # Si le système était déjà saturé à un RPS inférieur, on arrête (Stop Intelligent)
+                # Exception : on teste quand même le FIXED_RPS_COMPARISON s'il n'a pas été fait
+                if saturated_at and curr_rps > saturated_at and curr_rps != FIXED_RPS_COMPARISON:
+                    log(f"   Skipping {curr_rps} RPS (System already saturated at {saturated_at})", "WARN")
+                    continue
 
-            while curr_rps <= strat["max"]:
                 res = execute_test(app_id, img_name, curr_rps)
                 reason = analyze_saturation(res, curr_rps)
 
@@ -177,15 +189,14 @@ def run_suite(payload_set, app_list, csv_filename):
                 with open(csv_filename, 'a', newline='') as f:
                     csv.writer(f).writerow([datetime.datetime.now().isoformat(), app_id, img_name, img_size, curr_rps, res["observed_rps"], res["measured_gbps"], res["latency_avg_ms"], res["latency_p99_ms"], res["node_cpu_avg_percent"], reason])
 
+                # Mise à jour du point de saturation pour le stop intelligent
                 if reason != "None":
-                    log(f"   Saturation reached for {img_name} at {curr_rps} RPS. Moving to next payload.", "SUCCESS")
-                    break
-
-                next_rps = curr_rps + strat["step"]
-                if curr_rps < strat["max"] and next_rps > strat["max"]:
-                    curr_rps = strat["max"]
-                else:
-                    curr_rps = next_rps
+                    saturated_at = curr_rps
+                    log(f"   Saturation reached for {img_name} at {curr_rps} RPS.", "SUCCESS")
+                    # On ne break que si on a déjà dépassé le FIXED_RPS_COMPARISON
+                    if curr_rps >= FIXED_RPS_COMPARISON:
+                        log(f"   Moving to next payload.", "INFO")
+                        break
 
 # ==============================================================================
 # 4. GÉNÉRATION DES RAPPORTS SCIENTIFIQUES
