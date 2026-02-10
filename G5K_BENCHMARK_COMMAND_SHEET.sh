@@ -53,6 +53,10 @@ sudo-g5k sysctl -w net.ipv4.tcp_max_syn_backlog=1024
 # ------------------------------------------------------------------------------
 # Role: Transparently forward M1 requests to M3
 
+# Ensure port 8080 is free (stop Tomcat if it was started on M2 by mistake)
+cd ~/mesures/apache-tomcat-11.0.1 && ./bin/shutdown.sh 2>/dev/null || true
+sudo-g5k fuser -k 8080/tcp 2>/dev/null || true
+
 sudo-g5k apt update && sudo-g5k apt install -y nginx
 
 # Create Proxy Config with Keep-Alive to M3
@@ -82,7 +86,9 @@ EOF
 
 sudo-g5k ln -sf /etc/nginx/sites-available/serv-proxy /etc/nginx/sites-enabled/
 sudo-g5k rm -f /etc/nginx/sites-enabled/default
-sudo-g5k systemctl restart nginx
+
+# Check syntax before restarting
+sudo-g5k nginx -t && sudo-g5k systemctl restart nginx
 
 # --- SAFETY CHECK (From M2) ---
 # Verify that M2 can reach M3 before starting the benchmark
