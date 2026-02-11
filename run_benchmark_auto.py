@@ -5,7 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # ==============================================================================
-# 1. CONFIGURATION ET TOPOLOGIE (Version 4-Tier)
+# 1. CONFIGURATION ET TOPOLOGIE
 # ==============================================================================
 TOPOLOGY = {
     "client":       {"ip": "172.16.20.8"},
@@ -20,20 +20,20 @@ MEASURE_SEC          = 30
 WRK_THREADS          = 12
 WRK_CONNECTIONS      = 400
 TIMEOUT              = "15s"
-FIXED_RPS_COMPARISON = 1000  # Point de comparaison commun pour la latence
 
 # Seuils de diagnostic scientifique
 THEO_BW_GBPS         = 9.4
 THEO_CPU_LIMIT       = 95.0
 
+# HARMONISATION : Tout le monde commence à 500 RPS pour garantir un point commun
 STRATEGY = {
     "Serv": {
-        "small": {"start": 1000, "step": 5000, "max": 41000},
-        "large": {"start": 500,  "step": 500,  "max": 8000}
+        "small": {"start": 500, "step": 5000, "max": 40500},
+        "large": {"start": 500, "step": 500,  "max": 8000}
     },
     "Serv-odb": {
-        "small": {"start": 1000, "step": 10000, "max": 61000},
-        "large": {"start": 1000, "step": 10000, "max": 61000}
+        "small": {"start": 500, "step": 10000, "max": 60500},
+        "large": {"start": 500, "step": 10000, "max": 60500}
     }
 }
 
@@ -68,13 +68,10 @@ def analyze_saturation(res, target_rps):
     lat = res["latency_avg_ms"]
 
     if observed < (target_rps * 0.90):
-        if cpu >= THEO_CPU_LIMIT:
-            return "SAT_CPU: Intermediate node (M3) CPU fully saturated (>95%)"
-        if bw >= THEO_BW_GBPS:
-            return "SAT_BW: 10Gbps Network link saturated"
-        if lat > 500:
-            return "SAT_LATENCY: Latency exceeded 500ms threshold (System Stalled)"
-        return "SAT_SOFT: Throughput capped by Software (Tomcat Threads/Kernel Queues)"
+        if cpu >= THEO_CPU_LIMIT: return "SAT_CPU"
+        if bw >= THEO_BW_GBPS: return "SAT_BW"
+        if lat > 500: return "SAT_LATENCY"
+        return "SAT_SOFT"
     return "None"
 
 def parse_wrk_output(output):
@@ -84,15 +81,12 @@ def parse_wrk_output(output):
         val, unit = float(m.group(1)), m.group(2).upper()
         mult = {'G': 1e9, 'M': 1e6, 'K': 1e3, '': 1}
         res["measured_gbps"] = (val * mult.get(unit, 1) * 8) / 1e9
-
     if m := re.search(r'Latency\s+([\d\.]+)(\w+)', output):
         val, unit = float(m.group(1)), m.group(2)
         res["latency_avg_ms"] = val * 1000 if 's' == unit else val
-
     if m := re.search(r'99\.000%\s+([\d\.]+)(\w+)', output):
         val, unit = float(m.group(1)), m.group(2)
         res["latency_p99_ms"] = val * 1000 if 's' == unit else val
-
     errs = re.findall(r'errors: [a-z ]+(\d+)', output)
     res["errors_total"] = sum(map(int, errs)) if errs else 0
     return res
@@ -100,35 +94,30 @@ def parse_wrk_output(output):
 def execute_test(app_id, img_name, rate):
     inter_ip = TOPOLOGY["intermediate"]["ip"]
     lb_ip = TOPOLOGY["lb"]["ip"]
-    backend_hostname = TOPOLOGY["backend"]["hostname"]
-
-    url = f"http://{lb_ip}:8080{APPLICATIONS[app_id]['endpoint']}?machine={backend_hostname}&image={img_name}"
+    url = f"http://{lb_ip}:8080{APPLICATIONS[app_id]['endpoint']}?machine={TOPOLOGY['backend']['hostname']}&image={img_name}"
 
     clean_remote_logs()
-    wrk_path = "~/mesures/wrk2/wrk"
-
-    wrk_cmd = f"{wrk_path} -t{WRK_THREADS} -c{WRK_CONNECTIONS} -d{MEASURE_SEC}s -R{rate} -H 'Connection: keep-alive' --latency --timeout {TIMEOUT} \"{url}\""
+    wrk_cmd = f"~/mesures/wrk2/wrk -t{WRK_THREADS} -c{WRK_CONNECTIONS} -d{MEASURE_SEC}s -R{rate} -H 'Connection: keep-alive' --latency --timeout {TIMEOUT} \"{url}\""
     log(f"WRK EXEC: {wrk_cmd}", "INFO")
 
-    subprocess.run([f"{wrk_path} -t{WRK_THREADS} -c{WRK_CONNECTIONS} -d{WARMUP_SEC}s -R{rate} \"{url}\""], shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # Warmup
+    subprocess.run([f"~/mesures/wrk2/wrk -t{WRK_THREADS} -c{WRK_CONNECTIONS} -d{WARMUP_SEC}s -R{rate} \"{url}\""], shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
+    # Measure
     cpu_proc = subprocess.Popen([f"ssh {inter_ip} 'LC_ALL=C mpstat {MEASURE_SEC} 1 | grep Average > /tmp/cpu_measure.log'"], shell=True)
     wrk_run = subprocess.run([wrk_cmd], shell=True, capture_output=True, text=True)
     cpu_proc.wait()
 
     cpu_out = subprocess.run([f"ssh {inter_ip} 'cat /tmp/cpu_measure.log'"], shell=True, capture_output=True, text=True)
-    try:
-        cpu_idle = float(cpu_out.stdout.split()[-1])
-        cpu_val = 100.0 - cpu_idle
-    except:
-        cpu_val = 0.0
+    try: cpu_val = 100.0 - float(cpu_out.stdout.split()[-1])
+    except: cpu_val = 0.0
 
     data = parse_wrk_output(wrk_run.stdout)
     data["node_cpu_avg_percent"] = cpu_val
     return data
 
 # ==============================================================================
-# 3. GESTION DES SUITES DE TESTS (Avec Reprise et Stop Intelligent)
+# 3. GESTION DES SUITES DE TESTS
 # ==============================================================================
 
 def run_suite(payload_set, app_list, csv_filename):
@@ -138,11 +127,8 @@ def run_suite(payload_set, app_list, csv_filename):
             reader = csv.DictReader(f)
             for row in reader:
                 key = (row["servlet_name"], row["image_name"])
-                if key not in history: history[key] = []
-                history[key].append({
-                    "target": int(float(row["target_rps"])),
-                    "reason": row["reason"]
-                })
+                if key not in history: history[key] = set()
+                history[key].add(int(float(row["target_rps"])))
     else:
         with open(csv_filename, 'w') as f:
             csv.writer(f).writerow(["timestamp", "servlet_name", "image_name", "size_kb", "target_rps", "real_rps", "gbps", "lat_ms", "lat_p99_ms", "cpu", "reason"])
@@ -152,29 +138,12 @@ def run_suite(payload_set, app_list, csv_filename):
             log(f"SUITE: {app_id} | IMAGE: {img_name} ({img_size}KB)", "BOLD")
             strat = STRATEGY[app_id]["small" if img_size < 100 else "large"]
 
-            # 1. Génération de la liste des RPS à tester (inclut le point de comparaison fixe)
-            rps_to_test = [FIXED_RPS_COMPARISON]
-            rps_to_test += list(range(strat["start"], strat["max"] + 1, strat["step"]))
-            if rps_to_test[-1] < strat["max"]:
-                rps_to_test.append(strat["max"])
-            rps_to_test = sorted(list(set(rps_to_test)))
+            # Liste des RPS à tester
+            rps_list = sorted(list(range(strat["start"], strat["max"] + 1, strat["step"])))
+            if rps_list[-1] < strat["max"]: rps_list.append(strat["max"])
 
-            # 2. Filtrage pour la reprise (History)
-            tested_rps = set()
-            saturated_at = None
-            if (app_id, img_name) in history:
-                for h in history[(app_id, img_name)]:
-                    tested_rps.add(h["target"])
-                    if h["reason"] != "None":
-                        saturated_at = h["target"]
-
-            for curr_rps in rps_to_test:
-                if curr_rps in tested_rps: continue
-
-                # Stop Intelligent : On saute les RPS supérieurs au point de saturation
-                # EXCEPTION : On teste quand même le point fixe s'il n'est pas encore fait
-                if saturated_at and curr_rps > saturated_at and curr_rps != FIXED_RPS_COMPARISON:
-                    log(f"   Skipping {curr_rps} RPS (System already saturated at {saturated_at})", "WARN")
+            for curr_rps in rps_list:
+                if (app_id, img_name) in history and curr_rps in history[(app_id, img_name)]:
                     continue
 
                 res = execute_test(app_id, img_name, curr_rps)
@@ -187,12 +156,8 @@ def run_suite(payload_set, app_list, csv_filename):
                     csv.writer(f).writerow([datetime.datetime.now().isoformat(), app_id, img_name, img_size, curr_rps, res["observed_rps"], res["measured_gbps"], res["latency_avg_ms"], res["latency_p99_ms"], res["node_cpu_avg_percent"], reason])
 
                 if reason != "None":
-                    saturated_at = curr_rps
-                    log(f"   Saturation reached for {img_name} at {curr_rps} RPS.", "SUCCESS")
-                    # On ne break que si on a déjà dépassé le FIXED_RPS_COMPARISON
-                    if curr_rps >= FIXED_RPS_COMPARISON:
-                        log(f"   Moving to next payload.", "INFO")
-                        break
+                    log(f"   Saturation reached for {img_name} at {curr_rps} RPS. Stopping suite for this payload.", "SUCCESS")
+                    break
 
 # ==============================================================================
 # 4. GÉNÉRATION DES RAPPORTS SCIENTIFIQUES
@@ -202,12 +167,12 @@ def generate_all_reports(mot_csv, odb_csv, rnd_csv):
     log("GÉNÉRATION DES RAPPORTS D'ANALYSE", "SUCCESS")
     all_files = [f for f in [mot_csv, odb_csv, rnd_csv] if os.path.exists(f)]
     if not all_files: return
-    df_all = pd.concat([pd.read_csv(f) for f in all_files]).drop_duplicates(subset=['servlet_name', 'image_name', 'target_rps'])
+    df = pd.concat([pd.read_csv(f) for f in all_files]).drop_duplicates(subset=['servlet_name', 'image_name', 'target_rps'])
 
     # 1. Efficiency: CPU Cost per Request (CPU% / 1k RPS)
     plt.figure(figsize=(10, 6))
-    for app in df_all['servlet_name'].unique():
-        sub = df_all[(df_all['servlet_name'] == app) & (df_all['real_rps'] > 100)]
+    for app in df['servlet_name'].unique():
+        sub = df[(df['servlet_name'] == app) & (df['real_rps'] > 100)]
         if sub.empty: continue
         sub['cpu_cost'] = sub['cpu'] / (sub['real_rps'] / 1000.0)
         summary = sub.groupby('size_kb')['cpu_cost'].mean().sort_index()
@@ -215,7 +180,7 @@ def generate_all_reports(mot_csv, odb_csv, rnd_csv):
     plt.xscale('log'); plt.title("ODB Proof: CPU Efficiency (Cost per 1k RPS)"); plt.ylabel("CPU % per 1000 RPS"); plt.xlabel("Payload Size (KB)"); plt.legend(); plt.grid(True, which="both"); plt.savefig("graph_efficiency.png"); plt.close()
 
     # 2. ODB Speedup
-    max_rps = df_all.groupby(['servlet_name', 'size_kb'])['real_rps'].max().unstack(level=0)
+    max_rps = df.groupby(['servlet_name', 'size_kb'])['real_rps'].max().unstack(level=0)
     if 'Serv' in max_rps.columns and 'Serv-odb' in max_rps.columns:
         speedup = max_rps['Serv-odb'] / max_rps['Serv']
         plt.figure(figsize=(10, 6))
@@ -223,15 +188,25 @@ def generate_all_reports(mot_csv, odb_csv, rnd_csv):
         plt.title("ODB Speedup Factor (Max RPS Ratio)"); plt.ylabel("Speedup (x)"); plt.axhline(y=1.0, color='r', linestyle='--'); plt.savefig("graph_odb_speedup.png"); plt.close()
         max_rps[['Serv', 'Serv-odb']].assign(speedup=speedup).to_csv("results_comparison_max_rps.csv")
 
-    # 3. Latency at Fixed RPS
-    sub_lat = df_all[df_all['target_rps'] == FIXED_RPS_COMPARISON]
-    if not sub_lat.empty:
+    # 3. LATENCY COMPARISON : Recherche automatique du meilleur RPS commun
+    # On cherche le RPS le plus élevé où TOUT LE MONDE a réussi à passer sans saturer
+    stable_points = df[df['reason'] == 'None'].groupby('target_rps')['image_name'].nunique()
+    total_images = len(df['image_name'].unique())
+    # On ne garde que les RPS testés par toutes les images pour Serv ET Serv-odb
+    common_rps_list = stable_points[stable_points >= (total_images * 2)].index.tolist()
+
+    if common_rps_list:
+        best_common = max(common_rps_list)
+        log(f"   Generating Latency Comparison at common RPS: {best_common}", "INFO")
+        sub_lat = df[df['target_rps'] == best_common]
         plt.figure(figsize=(10, 6))
         for app in sub_lat['servlet_name'].unique():
             d = sub_lat[sub_lat['servlet_name'] == app].sort_values('size_kb')
             plt.plot(d['size_kb'], d['lat_ms'], 's-', label=f"{app} (Avg)")
-            plt.plot(d['size_kb'], d['lat_p99_ms'], 'x--', label=f"{app} (P99)", alpha=0.5)
-        plt.xscale('log'); plt.title(f"Latency Stability at {FIXED_RPS_COMPARISON} RPS"); plt.ylabel("Latency (ms)"); plt.legend(); plt.grid(True, which="both"); plt.savefig("graph_latency_fixed.png"); plt.close()
+            plt.plot(d['size_kb'], d['lat_p99_ms'], 'x--', label=f"{app} (P99)", alpha=0.4)
+        plt.xscale('log'); plt.title(f"Latency Stability at {best_common} RPS"); plt.ylabel("Latency (ms)"); plt.legend(); plt.grid(True, which="both"); plt.savefig("graph_latency_common.png"); plt.close()
+    else:
+        log("   No common stable RPS found for latency comparison graph.", "WARN")
 
 # ==============================================================================
 # MAIN
