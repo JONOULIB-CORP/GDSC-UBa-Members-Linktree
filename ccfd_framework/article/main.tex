@@ -79,14 +79,22 @@ The remainder of this paper is organized as follows: Section 2 reviews related w
 
 \section{Literature Review}
 \label{sec:lit_review}
-\subsection{Metamorphic Testing in FinTech}
-Metamorphic Testing (MT) was first proposed by Chen et al. (1998) as a way to alleviate the oracle problem. In financial systems, MT has been used to verify the correctness of calculation engines, but its application to ML-based fraud detection is relatively unexplored. Segura et al. (2016) highlighted the versatility of MT in complex systems, but emphasized the need for domain-specific relations.
+The validation of Credit Card Fraud Detection (CCFD) systems sits at the intersection of financial software engineering, machine learning, and search-based testing. This section reviews the prior work relevant to developing a robust testing framework for such systems, focusing on the challenges of the oracle problem, sequence-driven behaviors, and data imbalance.
 
-\subsection{Model-Based Testing and FSMs}
-Model-Based Testing (MBT) uses an explicit model (like an FSM) to drive test generation. While MBT is effective for protocol verification, it often lacks the statistical grounding needed for behavioral analysis. Our work bridges this gap by using unsupervised learning to derive the FSM from real-world datasets like the Kaggle CCFD set.
+\subsection{Testing Methodologies for CCFD and Financial Systems}
+Validation of financial software has traditionally relied on rigorous unit testing and integration testing based on pre-defined business rules. However, as noted by Masoumi et al. (2019), traditional testing fails when the system transitions from rule-based logic to probabilistic machine learning models. Prior work in CCFD validation has often focused on back-testing using labeled historical data. While effective for measuring average-case performance (e.g., AUC-ROC), back-testing is insufficient for identifying "decision holes"—specific regions of the input space where the model's logic is inconsistent. Our framework builds upon the work of Dal Pozzolo et al. (2015) by shifting the focus from detection accuracy to logic-aware validation.
 
-\subsection{Genetic Algorithms for Test Optimization}
-Genetic Algorithms (GA) have long been used to solve search-based software engineering problems. In the realm of security testing, GA is often used for fuzzing. However, most fuzzers optimize for code coverage. Our framework optimizes for \textit{logic violations} (MR violations), which is more relevant for verifying the decision boundaries of black-box ML models.
+\subsection{The Oracle Problem in Machine Learning Validation}
+The "Oracle Problem" is the most significant hurdle in testing CCFD systems. Since the ground truth for a transaction is only known after a significant delay, traditional test oracles are non-existent in real-time. Metamorphic Testing (MT), introduced by Chen et al. (1998), addressed this by using Metamorphic Relations (MRs). Xie et al. (2011) and Segura et al. (2016) demonstrated that MT is particularly suited for machine learning classifiers, where the expected output for a single input is hard to define, but the relationship between outputs for multiple related inputs must follow certain invariants. Our study extends these findings by proposing domain-specific MRs (e.g., Monotonicity) tailored for the financial fraud domain.
+
+\subsection{Sequence-Driven and Model-Based Testing}
+CCFD systems are inherently event-driven and sequence-dependent. Prior studies on testing sequence-driven systems have extensively used Finite State Machines (FSMs) for test case generation (Jha et al., 2001). However, in resource-constrained or high-throughput environments, the state space explosion makes manual FSM construction unfeasible. Our approach draws inspiration from the field of behavioral profile inference, using unsupervised learning (K-Means) to automatically derive FSMs from anonymized datasets. This allows for a statistically grounded Model-Based Testing (MBT) approach that reflects real-world user behaviors rather than abstract protocol specifications.
+
+\subsection{Testing in Resource-Constrained and Imbalanced Environments}
+The Kaggle CCFD dataset exhibits extreme data imbalance (less than 0.2\% fraud). Traditional testing methods often fail to adequately explore the minority class. Studies by Yoo et al. (2012) and Zhang et al. (2014) on search-based software testing (SBSE) suggest that Genetic Algorithms (GAs) can be used to direct the testing process towards rare but critical events. By using a GA to evolve transaction sequences that maximize MR violations, our framework effectively "fuzzes" the decision boundary of the CCFD system, ensuring that rare fraudulent patterns are not overlooked due to the model's bias towards the majority class.
+
+\subsection{Comparison with Existing Frameworks}
+While existing frameworks like DeepTest or DeepGauge focus on neuron coverage in deep learning, they are often ill-suited for the tabular and sequence-dependent data typical of CCFD. Our hybrid approach—combining FSM context, MT logic, and GA optimization—fills a unique gap by providing a behavioral-aware, oracle-less validation environment for event-driven financial systems.
 
 \section{Proposed Approach: The Hybrid Framework}
 \label{sec:methodology}

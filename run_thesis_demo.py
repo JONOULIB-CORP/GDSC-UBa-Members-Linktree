@@ -3,7 +3,10 @@ import sys
 
 def main():
     print("="*60)
-    print(" CCFD HYBRID FRAMEWORK - DEMO RUNNER")
+    print(" CCFD HYBRID TESTING FRAMEWORK (Validation Tool)")
+    print("="*60)
+    print("OBJECTIVE: This tool does NOT detect fraud. It TESTS existing")
+    print("fraud detectors to find their logical vulnerabilities.")
     print("="*60)
 
     # 1. Environment Check
