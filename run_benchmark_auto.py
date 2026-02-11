@@ -169,17 +169,48 @@ def generate_all_reports(mot_csv, odb_csv, rnd_csv):
     if not all_files: return
     df = pd.concat([pd.read_csv(f) for f in all_files]).drop_duplicates(subset=['servlet_name', 'image_name', 'target_rps'])
 
-    # 1. Efficiency: CPU Cost per Request (CPU% / 1k RPS)
+    # 1. Motivation: Combined graph (RPSmax, Gbps, CPU) in one PNG
+    df_mot = df[df['servlet_name'] == 'Serv']
+    if not df_mot.empty:
+        summary_mot = df_mot.groupby('size_kb').agg({'real_rps': 'max', 'gbps': 'max', 'cpu': 'max'}).sort_index()
+        fig, axes = plt.subplots(3, 1, figsize=(10, 15), sharex=True)
+
+        metrics = [('real_rps', 'Max Requests/sec', 'blue'), ('gbps', 'Max Throughput (Gbps)', 'green'), ('cpu', 'CPU Usage (%)', 'red')]
+        for i, (col, label, color) in enumerate(metrics):
+            axes[i].plot(summary_mot.index, summary_mot[col], 'o-', color=color)
+            axes[i].set_ylabel(label); axes[i].grid(True, which="both"); axes[i].set_xscale('log')
+
+        axes[0].set_title("Standard Servlet Bottlenecks vs Payload Size")
+        axes[2].set_xlabel("Payload Size (KB)")
+        plt.tight_layout(); plt.savefig("graph_motivation_combined.png"); plt.close()
+
+    # 2. ODB Invariance: ODB results for all images vs standard on 1KB
+    baseline_1kb = df[(df['servlet_name'] == 'Serv') & (df['size_kb'] <= 1.5)]['real_rps'].max()
+    df_odb = df[df['servlet_name'] == 'Serv-odb']
+    if not df_odb.empty:
+        summary_odb = df_odb.groupby('size_kb')['real_rps'].max().sort_index()
+        plt.figure(figsize=(10, 6))
+        plt.plot(summary_odb.index, summary_odb.values, 's-', color='purple', label='Serv-odb (All sizes)')
+        if baseline_1kb:
+            plt.axhline(y=baseline_1kb, color='red', linestyle='--', label='Serv baseline (1KB)')
+            plt.text(summary_odb.index[0], baseline_1kb * 1.02, 'Baseline 1KB', color='red', fontweight='bold')
+
+        plt.xscale('log'); plt.ylim(0, max(summary_odb.max(), baseline_1kb or 0) * 1.2)
+        plt.title("ODB Invariance Proof: Performance across image sizes"); plt.ylabel("Max RPS reached"); plt.xlabel("Payload Size (KB)")
+        plt.legend(); plt.grid(True, which="both"); plt.savefig("graph_odb_invariance.png"); plt.close()
+
+    # 3. Efficiency: CPU Cost per Request (CPU% / 1k RPS)
     plt.figure(figsize=(10, 6))
     for app in df['servlet_name'].unique():
         sub = df[(df['servlet_name'] == app) & (df['real_rps'] > 100)]
         if sub.empty: continue
+        sub = sub.copy()
         sub['cpu_cost'] = sub['cpu'] / (sub['real_rps'] / 1000.0)
         summary = sub.groupby('size_kb')['cpu_cost'].mean().sort_index()
         plt.plot(summary.index, summary.values, 'o-', label=f"{app} Efficiency")
     plt.xscale('log'); plt.title("ODB Proof: CPU Efficiency (Cost per 1k RPS)"); plt.ylabel("CPU % per 1000 RPS"); plt.xlabel("Payload Size (KB)"); plt.legend(); plt.grid(True, which="both"); plt.savefig("graph_efficiency.png"); plt.close()
 
-    # 2. ODB Speedup
+    # 4. ODB Speedup
     max_rps = df.groupby(['servlet_name', 'size_kb'])['real_rps'].max().unstack(level=0)
     if 'Serv' in max_rps.columns and 'Serv-odb' in max_rps.columns:
         speedup = max_rps['Serv-odb'] / max_rps['Serv']
@@ -188,12 +219,12 @@ def generate_all_reports(mot_csv, odb_csv, rnd_csv):
         plt.title("ODB Speedup Factor (Max RPS Ratio)"); plt.ylabel("Speedup (x)"); plt.axhline(y=1.0, color='r', linestyle='--'); plt.savefig("graph_odb_speedup.png"); plt.close()
         max_rps[['Serv', 'Serv-odb']].assign(speedup=speedup).to_csv("results_comparison_max_rps.csv")
 
-    # 3. LATENCY COMPARISON : Recherche automatique du meilleur RPS commun
-    # On cherche le RPS le plus élevé où TOUT LE MONDE a réussi à passer sans saturer
-    stable_points = df[df['reason'] == 'None'].groupby('target_rps')['image_name'].nunique()
-    total_images = len(df['image_name'].unique())
-    # On ne garde que les RPS testés par toutes les images pour Serv ET Serv-odb
-    common_rps_list = stable_points[stable_points >= (total_images * 2)].index.tolist()
+    # 5. LATENCY COMPARISON : Recherche automatique du meilleur RPS commun
+    # On cherche le RPS le plus élevé où TOUT LE MONDE (images x servlets) est stable
+    df['pair'] = df['servlet_name'] + "_" + df['image_name']
+    stable_points = df[df['reason'] == 'None'].groupby('target_rps')['pair'].nunique()
+    expected_pairs = len(df['servlet_name'].unique()) * len(df['image_name'].unique())
+    common_rps_list = stable_points[stable_points >= expected_pairs].index.tolist()
 
     if common_rps_list:
         best_common = max(common_rps_list)

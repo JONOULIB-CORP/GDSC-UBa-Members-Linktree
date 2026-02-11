@@ -25,10 +25,10 @@ After running `python3 run_benchmark_auto.py --mode all`, you should find the fo
 ## 2. Scientific Graphs (PNG)
 
 ### Motivation & Bottlenecks
-- `graph_motivation_cpu.png`: Shows how CPU consumption increases with RPS for different image sizes in the baseline.
-- `graph_motivation_gbps.png`: Shows the network throughput reaching the 10Gbps ceiling for large images in the baseline.
+- **`graph_motivation_combined.png`**: A 3-panel summary plot (Max RPS, Max Bandwidth, and CPU at saturation) vs Payload Size. It clearly shows the shift from CPU-bound (small files) to Bandwidth-bound (large files) in the baseline.
 
 ### ODB Performance Proofs
 - **`graph_efficiency.png`**: (Crucial Proof). Shows the CPU cost per 1000 requests. For ODB, this curve remains **flat and low**, proving that the CPU cost is independent of payload size. For standard Serv, the cost **increases** with image size.
+- **`graph_odb_invariance.png`**: Comparison plot showing that ODB performance at any image size matches or exceeds the baseline performance for the smallest (1KB) image.
 - **`graph_odb_speedup.png`**: A bar chart showing the speedup factor of ODB over the baseline. Speedup should be massive for 1MB images.
-- **`graph_latency_fixed.png`**: Compares the average and P99 latency at a fixed RPS. ODB maintains much lower and more stable latency than the baseline as payload size increases.
+- **`graph_latency_common.png`**: Compares the average and P99 latency at the highest stable common RPS. ODB maintains much lower and more stable latency than the baseline as payload size increases.
