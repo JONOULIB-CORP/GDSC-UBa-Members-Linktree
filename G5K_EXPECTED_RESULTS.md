@@ -24,11 +24,13 @@ After running `python3 run_benchmark_auto.py --mode all`, you should find the fo
 
 ## 2. Scientific Graphs (PNG)
 
-### Motivation & Bottlenecks
-- **`graph_motivation_combined.png`**: A 3-panel summary plot (Max RPS, Max Bandwidth, and CPU at saturation) vs Payload Size. It clearly shows the shift from CPU-bound (small files) to Bandwidth-bound (large files) in the baseline.
+Toutes les courbes utilisent une échelle logarithmique pour les tailles d'images (1KB à 1MB).
 
-### ODB Performance Proofs
-- **`graph_efficiency.png`**: (Crucial Proof). Shows the CPU cost per 1000 requests. For ODB, this curve remains **flat and low**, proving that the CPU cost is independent of payload size. For standard Serv, the cost **increases** with image size.
-- **`graph_odb_invariance.png`**: Comparison plot showing that ODB performance at any image size matches or exceeds the baseline performance for the smallest (1KB) image.
-- **`graph_odb_speedup.png`**: A bar chart showing the speedup factor of ODB over the baseline. Speedup should be massive for 1MB images.
-- **`graph_latency_common.png`**: Compares the average and P99 latency at the highest stable common RPS. ODB maintains much lower and more stable latency than the baseline as payload size increases.
+### Motivation & Bottlenecks
+- **`graph_motivation_combined.png`** : Graphe à 3 panneaux (RPSmax, Débit Gbps, et CPU à saturation). Il prouve visuellement le passage d'un goulot CPU (petits fichiers) à un goulot Bande passante (gros fichiers).
+
+### Preuves de performance ODB
+- **`graph_efficiency.png`** : **LA preuve scientifique.** Affiche le "Coût CPU pour 1000 requêtes". Pour ODB, cette courbe doit rester **plate et basse**, prouvant l'indépendance vis-à-vis de la taille. Pour `Serv`, le coût explose.
+- **`graph_odb_invariance.png`** : Montre que les performances d'ODB sur tous les fichiers (même 1MB) "collent" à la performance du servlet standard sur un tout petit fichier (1KB).
+- **`graph_odb_speedup.png`** : Histogramme du gain brut (ex: ODB est 8x plus rapide sur 1MB).
+- **`graph_latency_common.png`** : Comparaison de la latence au meilleur RPS commun trouvé dynamiquement par le script.
