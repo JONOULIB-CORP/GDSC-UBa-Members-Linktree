@@ -20,7 +20,7 @@ MEASURE_SEC          = 30
 WRK_THREADS          = 12
 WRK_CONNECTIONS      = 400
 TIMEOUT              = "15s"
-FIXED_RPS_COMPARISON = 500 # Harmonisé à 500 pour que tout le monde ait un point commun
+FIXED_RPS_COMPARISON = 500
 
 # Seuils de diagnostic scientifique
 THEO_BW_GBPS         = 9.4
@@ -42,12 +42,21 @@ APPLICATIONS = {
     "Serv-odb": {"endpoint": "/serv1/Serv"}
 }
 
+# Pool complet d'images (50 images)
 FULL_PAYLOAD_POOL = {
-    "image_1KB.jpg": 1.0, "image_10KB.jpg": 10.0, "image_100KB.jpg": 100.0, "image_1000KB.jpg": 1024.0,
     "img1.jpg":1.3, "img2.jpg":89.5, "img3.jpg":117.8, "img4.jpg":117.8, "img5.jpg":257.9,
-    "img10.jpg":466.8, "img24.jpg":753.5, "img48.jpg":999.7, "img50.jpg":970.7
+    "img6.jpg":224, "img7.jpg":278.4, "img8.jpg":189.5, "img9.jpg":546.2, "img10.jpg":466.8,
+    "img11.jpg":419.4, "img12.jpg":921.7, "img13.jpg":16.9, "img14.jpg":24.7, "img15.jpg":38,
+    "img16.jpg":203.1, "img17.jpg":532.7, "img18.jpg":95, "img19.jpg":18.5, "img20.jpg":32.1,
+    "img21.jpg":96.2, "img22.jpg":30, "img23.jpg":7.7, "img24.jpg":753.5, "img25.jpg":477.6,
+    "img26.jpg":5.8, "img27.jpg":30.2, "img28.jpg":35.2, "img29.jpg":28.6, "img30.jpg":912.9,
+    "img31.jpg":28.4, "img32.jpg":588, "img33.jpg":613.1, "img34.jpg":26.0, "img35.jpg":2.8,
+    "img36.jpg":9.2, "img37.jpg":31.7, "img38.jpg":2.5, "img39.jpg":470.3, "img40.jpg":8,
+    "img41.jpg":13.3, "img42.jpg":11.2, "img43.jpg":4.8, "img44.jpg":271.9, "img45.jpg":41.8,
+    "img46.jpg":50.8, "img47.jpg":570.9, "img48.jpg":999.7, "img49.jpg":38.9, "img50.jpg":970.7,
 }
-CORE_PAYLOADS = {k: FULL_PAYLOAD_POOL[k] for k in ["image_1KB.jpg", "image_10KB.jpg", "image_100KB.jpg", "image_1000KB.jpg"]}
+# On garde quelques points clés pour les modes motivation/odb_test de base
+CORE_PAYLOADS = {k: FULL_PAYLOAD_POOL[k] for k in ["img1.jpg", "img13.jpg", "img2.jpg", "img48.jpg"] if k in FULL_PAYLOAD_POOL}
 
 # ==============================================================================
 # 2. LOGIQUE DE MONITORING
@@ -162,14 +171,18 @@ def generate_all_reports(mot_csv, odb_csv, rnd_csv):
     if not all_files: return
     df = pd.concat([pd.read_csv(f) for f in all_files]).drop_duplicates(subset=['servlet_name', 'image_name', 'target_rps'])
 
-    # 1. Motivation Combined
+    # 1. Motivation Combined: 3 subplots (Max RPS, BW at Max, CPU at Max) vs Size
     df_mot = df[df['servlet_name'] == 'Serv']
     if not df_mot.empty:
-        sm = df_mot.groupby('size_kb').agg({'real_rps': 'max', 'gbps': 'max', 'cpu_inter': 'max'}).sort_index()
+        # On trouve la ligne de RPS max pour chaque taille d'image
+        idx = df_mot.groupby('size_kb')['real_rps'].idxmax()
+        sm = df_mot.loc[idx].sort_values('size_kb')
+
         fig, axes = plt.subplots(3, 1, figsize=(10, 15), sharex=True)
-        for i, (col, lbl, clr) in enumerate([('real_rps', 'Max RPS', 'b'), ('gbps', 'Max Gbps', 'g'), ('cpu_inter', 'CPU% proxy', 'r')]):
-            axes[i].plot(sm.index, sm[col], 'o-', color=clr); axes[i].set_ylabel(lbl); axes[i].grid(True, which="both"); axes[i].set_xscale('log')
+        for i, (col, lbl, clr) in enumerate([('real_rps', 'Max Requests/sec', 'b'), ('gbps', 'Bandwidth at Max RPS (Gbps)', 'g'), ('cpu_inter', 'CPU% Proxy at Max RPS', 'r')]):
+            axes[i].plot(sm['size_kb'], sm[col], 'o-', color=clr); axes[i].set_ylabel(lbl); axes[i].grid(True, which="both"); axes[i].set_xscale('log')
         axes[0].set_title("Standard Servlet Bottlenecks vs Payload Size")
+        axes[2].set_xlabel("Payload Size (KB)")
         plt.tight_layout(); plt.savefig("graph_motivation_combined.png"); plt.close()
 
     # 2. ODB Invariance Proof
@@ -189,10 +202,10 @@ def generate_all_reports(mot_csv, odb_csv, rnd_csv):
         sub = df[(df['servlet_name'] == app) & (df['real_rps'] > 100)].copy()
         sub['cost'] = sub['cpu_inter'] / (sub['real_rps'] / 1000.0)
         sum_eff = sub.groupby('size_kb')['cost'].mean().sort_index()
-        plt.plot(sum_eff.index, sum_eff.values, 'o-', label=f"{app} Efficiency")
+        plt.plot(sum_eff.index, sum_eff.values, 'o-', label=app)
     plt.xscale('log'); plt.title("CPU Efficiency (Cost per 1k requests)"); plt.ylabel("CPU % per 1000 RPS"); plt.legend(); plt.grid(True, which="both"); plt.savefig("graph_efficiency.png"); plt.close()
 
-    # 4. ODB Speedup & Multi-Node CPU
+    # 4. ODB Speedup
     max_rps = df.groupby(['servlet_name', 'size_kb'])['real_rps'].max().unstack(level=0)
     if 'Serv' in max_rps.columns and 'Serv-odb' in max_rps.columns:
         speedup = max_rps['Serv-odb'] / max_rps['Serv']
@@ -200,18 +213,30 @@ def generate_all_reports(mot_csv, odb_csv, rnd_csv):
         plt.title("ODB Speedup Factor (Max RPS Ratio)"); plt.ylabel("Speedup (x)"); plt.axhline(y=1.0, color='r', ls='--'); plt.savefig("graph_odb_speedup.png"); plt.close()
         max_rps[['Serv', 'Serv-odb']].assign(speedup=speedup).to_csv("results_comparison_max_rps.csv")
 
-    # 5. Dynamic Latency
+    # 5. Dynamic Latency & Metrics at Fixed RPS
     df['pair'] = df['servlet_name'] + "_" + df['image_name']
     stb = df[df['reason'] == 'None'].groupby('target_rps')['pair'].nunique()
     common = stb[stb >= (len(df['servlet_name'].unique()) * len(df['image_name'].unique()))].index.tolist()
     if common:
         bc = max(common)
         sub = df[df['target_rps'] == bc]
+
+        # Latency graph
         plt.figure(figsize=(10, 6))
         for app in sub['servlet_name'].unique():
             d = sub[sub['servlet_name'] == app].sort_values('size_kb')
             plt.plot(d['size_kb'], d['lat_ms'], 's-', label=f"{app} Avg Latency at {bc} RPS")
         plt.xscale('log'); plt.legend(); plt.grid(True, which="both"); plt.savefig("graph_latency_common.png"); plt.close()
+
+        # New: CPU and Bandwidth per image at fixed RPS
+        fig, ax1 = plt.subplots(figsize=(10, 6))
+        ax2 = ax1.twinx()
+        for app in sub['servlet_name'].unique():
+            d = sub[sub['servlet_name'] == app].sort_values('size_kb')
+            ax1.plot(d['size_kb'], d['cpu_inter'], 'o-', label=f"{app} CPU")
+            ax2.plot(d['size_kb'], d['gbps'], 'x--', label=f"{app} Bandwidth", alpha=0.6)
+        ax1.set_xscale('log'); ax1.set_xlabel("Payload Size (KB)"); ax1.set_ylabel("CPU Proxy (%)"); ax2.set_ylabel("Throughput (Gbps)")
+        plt.title(f"CPU & Bandwidth Trace per image at {bc} RPS"); ax1.legend(loc='upper left'); ax2.legend(loc='upper right'); plt.grid(True); plt.savefig("graph_fixed_rps_metrics.png"); plt.close()
 
 # ==============================================================================
 # MAIN
@@ -225,7 +250,7 @@ if __name__ == "__main__":
     if args.mode in ['motivation', 'all']: run_suite(CORE_PAYLOADS, ["Serv"], F_MOT, TOPOLOGY)
     if args.mode in ['odb_test', 'all']: run_suite(CORE_PAYLOADS, ["Serv-odb"], F_ODB, TOPOLOGY)
     if args.mode in ['random_table', 'all']:
-        rnd = dict(random.sample(list(FULL_PAYLOAD_POOL.items()), min(5, len(FULL_PAYLOAD_POOL))))
+        rnd = dict(random.sample(list(FULL_PAYLOAD_POOL.items()), min(10, len(FULL_PAYLOAD_POOL))))
         run_suite(rnd, ["Serv", "Serv-odb"], F_RND, TOPOLOGY)
     if args.mode != 'none': generate_all_reports(F_MOT, F_ODB, F_RND)
     log("TERMINÉ.", "SUCCESS")

@@ -28,11 +28,12 @@ After running `python3 run_benchmark_auto.py --mode all`, you should find the fo
 Toutes les courbes utilisent une échelle logarithmique pour les tailles d'images (1KB à 1MB).
 
 ### Motivation & Bottlenecks
-- **`graph_motivation_combined.png`** : Graphe à 3 panneaux (RPSmax, Débit Gbps, et CPU à saturation). Il prouve visuellement le passage d'un goulot CPU (petits fichiers) à un goulot Bande passante (gros fichiers).
+- **`graph_motivation_combined.png`** : Graphe à 3 panneaux (RPSmax, Débit Gbps au RPSmax, et CPU au RPSmax). Il prouve visuellement le passage d'un goulot CPU (petits fichiers) à un goulot Bande passante (gros fichiers).
 
 ### Preuves de performance ODB
 - **`graph_efficiency.png`** : **LA preuve scientifique.** Affiche le "Coût CPU sur M3 pour 1000 requêtes". Pour ODB, cette courbe est plate.
 - **`graph_odb_invariance.png`** : Montre que ODB (toutes tailles) est équivalent au standard (1KB).
 - **`graph_odb_speedup.png`** : Histogramme du gain brut.
 - **`graph_latency_common.png`** : Comparaison de la latence au meilleur RPS commun trouvé dynamiquement.
+- **`graph_fixed_rps_metrics.png`** : Trace l'évolution du CPU et de la Bande passante par image pour un RPS stable et commun.
 - **`graph_multi_node_cpu.png`** : Compare la charge CPU sur le LB (M2), le Proxy (M3) et le Backend (M4) lors de la saturation ODB.
