@@ -70,15 +70,23 @@ upstream tomcat_backend {
 
 server {
     listen 8080;
+
+    # Standard Servlet
     location /serv/ {
         proxy_pass http://tomcat_backend;
-
         proxy_http_version 1.1;
         proxy_set_header Connection "";
-
         proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_buffers 16 16k;
+        proxy_buffer_size 32k;
+    }
 
+    # ODB Servlet
+    location /serv1/ {
+        proxy_pass http://tomcat_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host \$host;
         proxy_buffers 16 16k;
         proxy_buffer_size 32k;
     }
@@ -134,3 +142,24 @@ mpstat -P ALL 1
 
 # On M3: check network queues
 ss -lnt
+
+# ------------------------------------------------------------------------------
+# 6. TROUBLESHOOTING: FIXING "NoSuchMethodError" or "404"
+# ------------------------------------------------------------------------------
+
+# A. Fix 404: Ensure web.xml is in the correct location
+# For serv1 (ODB):
+mkdir -p ~/mesures/apache-tomcat-11.0.1/webapps/serv1/WEB-INF
+mv ~/mesures/apache-tomcat-11.0.1/webapps/serv1/web.xml ~/mesures/apache-tomcat-11.0.1/webapps/serv1/WEB-INF/
+
+# B. Fix NoSuchMethodError: Clean and Recompile Servlets
+# Navigate to the classes directory
+cd ~/mesures/apache-tomcat-11.0.1/webapps/serv1/WEB-INF/classes
+
+# Recompile Serv.java (Ensure you have the .java source file available)
+# The classpath (-cp) must include Tomcat's servlet-api (usually in ../../../lib/)
+javac -cp "../../../lib/*" app/Serv.java
+
+# Restart Tomcat to apply changes
+cd ~/mesures/apache-tomcat-11.0.1
+./bin/shutdown.sh && ./bin/startup.sh
