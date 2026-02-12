@@ -60,7 +60,7 @@ FULL_PAYLOAD_POOL = {
 CORE_PAYLOADS = {k: FULL_PAYLOAD_POOL[k] for k in ["image_1KB.jpg", "image_10KB.jpg", "image_100KB.jpg", "image_1000KB.jpg"] if k in FULL_PAYLOAD_POOL}
 
 # ==============================================================================
-# 2. LOGIQUE DE MONITORING
+# 2. LOGIQUE DE MONITORING ET ANALYSE
 # ==============================================================================
 
 def log(msg, level="INFO"):
@@ -96,12 +96,22 @@ def clean_remote_logs(ips):
 
 def analyze_saturation(res, target_rps):
     observed, cpu, bw, lat = res["real_rps"], res["cpu_inter"], res["gbps"], res["lat_ms"]
+    details = f"Real:{observed:.0f} RPS, CPU:{cpu:.1f}%, BW:{bw:.2f} Gbps, Lat:{lat:.1f}ms"
+
+    # 1. Saturation par débit (RPS drop)
     if observed < (target_rps * 0.90):
-        if cpu >= THEO_CPU_LIMIT: return "SAT_CPU"
-        if bw >= THEO_BW_GBPS: return "SAT_BW"
-        if lat > 500: return "SAT_LATENCY"
-        return "SAT_SOFT"
-    return "None"
+        # Pourquoi ça drop ?
+        if cpu >= THEO_CPU_LIMIT:
+            return "SAT_CPU", f"CPU Limit Hit ({cpu:.1f}% >= {THEO_CPU_LIMIT}%). Info: {details}"
+        if bw >= THEO_BW_GBPS:
+            return "SAT_BW", f"Bandwidth Limit Hit ({bw:.2f} >= {THEO_BW_GBPS} Gbps). Info: {details}"
+        return "SAT_SOFT", f"Throughput Drop (>10% loss). Info: {details}"
+
+    # 2. Saturation par Latence (System Stall)
+    if lat > 500:
+        return "SAT_LATENCY", f"Latency Threshold Hit ({lat:.1f}ms > 500ms). Info: {details}"
+
+    return "None", f"Stable. Info: {details}"
 
 def parse_wrk_output(output):
     res = {"real_rps": 0.0, "gbps": 0.0, "lat_ms": 0.0, "lat_p99_ms": 0.0}
@@ -137,8 +147,12 @@ def execute_test(app_id, img_name, rate, topo):
     return data
 
 # ==============================================================================
-# 3. GESTION DES SUITES DE TESTS
+# 3. GESTION DES SUITES DE TESTS (Precision Phase)
 # ==============================================================================
+
+def save_result(csv_filename, row):
+    with open(csv_filename, 'a', newline='') as f:
+        csv.writer(f).writerow(row)
 
 def run_suite(payload_set, app_list, csv_filename, topo):
     history = {}
@@ -146,21 +160,54 @@ def run_suite(payload_set, app_list, csv_filename, topo):
         with open(csv_filename, 'r') as f:
             reader = csv.DictReader(f); [history.setdefault((r["servlet_name"], r["image_name"]), set()).add(int(float(r["target_rps"]))) for r in reader]
     else:
-        with open(csv_filename, 'w') as f: csv.writer(f).writerow(["timestamp", "servlet_name", "image_name", "size_kb", "target_rps", "real_rps", "gbps", "lat_ms", "lat_p99_ms", "cpu_lb", "cpu_inter", "cpu_back", "bw_lb", "bw_inter", "bw_back", "reason"])
+        with open(csv_filename, 'w') as f: csv.writer(f).writerow(["timestamp", "servlet_name", "image_name", "size_kb", "target_rps", "real_rps", "gbps", "lat_ms", "lat_p99_ms", "cpu_lb", "cpu_inter", "cpu_back", "bw_lb", "bw_inter", "bw_back", "reason", "justification"])
 
     for img_name, img_size in payload_set.items():
         for app_id in app_list:
             log(f"SUITE: {app_id} | {img_name}", "BOLD")
             strat = STRATEGY[app_id]["small" if img_size < 100 else "large"]
+
+            last_stable_rps = 0
+
+            # 1. Sweep Principal (Gros paliers)
             rps_list = sorted(list(set([FIXED_RPS_COMPARISON] + list(range(strat["start"], strat["max"] + 1, strat["step"])))))
             for curr_rps in rps_list:
-                if (app_id, img_name) in history and curr_rps in history[(app_id, img_name)]: continue
+                if (app_id, img_name) in history and curr_rps in history[(app_id, img_name)]:
+                    last_stable_rps = curr_rps
+                    continue
+
                 res = execute_test(app_id, img_name, curr_rps, topo)
-                reason = analyze_saturation(res, curr_rps)
-                print(f"   [RES] {res['real_rps']:>6.0f}/{curr_rps:>6} | CPU Inter: {res['cpu_inter']:>4.1f}% | Sat: {reason}")
-                with open(csv_filename, 'a', newline='') as f:
-                    csv.writer(f).writerow([datetime.datetime.now().isoformat(), app_id, img_name, img_size, curr_rps, res["real_rps"], res["gbps"], res["lat_ms"], res["lat_p99_ms"], res["cpu_lb"], res["cpu_inter"], res["cpu_back"], res["bw_lb"], res["bw_inter"], res["bw_back"], reason])
-                if reason != "None" and curr_rps >= FIXED_RPS_COMPARISON: break
+                code, just = analyze_saturation(res, curr_rps)
+                print(f"   [RES] {res['real_rps']:>6.0f}/{curr_rps:>6} | CPU Inter: {res['cpu_inter']:>4.1f}% | Sat: {code}")
+
+                row = [datetime.datetime.now().isoformat(), app_id, img_name, img_size, curr_rps, res["real_rps"], res["gbps"], res["lat_ms"], res["lat_p99_ms"], res["cpu_lb"], res["cpu_inter"], res["cpu_back"], res["bw_lb"], res["bw_inter"], res["bw_back"], code, just]
+                save_result(csv_filename, row)
+
+                if code == "None":
+                    last_stable_rps = curr_rps
+                else:
+                    # SATURATION DETECTÉE -> PHASE DE PRÉCISION (Finer Sweep)
+                    threshold_for_precision = 1000 if img_size < 100 else 400
+                    if last_stable_rps > 0 and (curr_rps - last_stable_rps) > threshold_for_precision:
+                        log(f"   PRECISION PHASE: Refining limit between {last_stable_rps} and {curr_rps}", "WARN")
+                        fine_step = 1000 if img_size < 100 else 200
+                        fine_rps = last_stable_rps + fine_step
+                        while fine_rps < curr_rps:
+                            if (app_id, img_name) in history and fine_rps in history[(app_id, img_name)]:
+                                fine_rps += fine_step
+                                continue
+
+                            res_f = execute_test(app_id, img_name, fine_rps, topo)
+                            code_f, just_f = analyze_saturation(res_f, fine_rps)
+                            print(f"      [PRECISION] {res_f['real_rps']:>6.0f}/{fine_rps:>6} | CPU: {res_f['cpu_inter']:>4.1f}% | Sat: {code_f}")
+
+                            row_f = [datetime.datetime.now().isoformat(), app_id, img_name, img_size, fine_rps, res_f["real_rps"], res_f["gbps"], res_f["lat_ms"], res_f["lat_p99_ms"], res_f["cpu_lb"], res_f["cpu_inter"], res_f["cpu_back"], res_f["bw_lb"], res_f["bw_inter"], res_f["bw_back"], code_f, just_f]
+                            save_result(csv_filename, row_f)
+
+                            if code_f != "None": break
+                            fine_rps += fine_step
+
+                    if curr_rps >= FIXED_RPS_COMPARISON: break
 
 # ==============================================================================
 # 4. GÉNÉRATION DES RAPPORTS
@@ -172,18 +219,15 @@ def generate_all_reports(mot_csv, odb_csv, rnd_csv):
     if not all_files: return
     df = pd.concat([pd.read_csv(f) for f in all_files]).drop_duplicates(subset=['servlet_name', 'image_name', 'target_rps'])
 
-    # 1. Motivation Combined: 3 subplots (Max RPS, BW at Max, CPU at Max) vs Size
+    # 1. Motivation Combined
     df_mot = df[df['servlet_name'] == 'Serv']
     if not df_mot.empty:
-        # On trouve la ligne de RPS max pour chaque taille d'image
         idx = df_mot.groupby('size_kb')['real_rps'].idxmax()
         sm = df_mot.loc[idx].sort_values('size_kb')
-
         fig, axes = plt.subplots(3, 1, figsize=(10, 15), sharex=True)
-        for i, (col, lbl, clr) in enumerate([('real_rps', 'Max Requests/sec', 'b'), ('gbps', 'Bandwidth at Max RPS (Gbps)', 'g'), ('cpu_inter', 'CPU% Proxy at Max RPS', 'r')]):
+        for i, (col, lbl, clr) in enumerate([('real_rps', 'Max RPS', 'b'), ('gbps', 'Max Gbps', 'g'), ('cpu_inter', 'CPU% proxy', 'r')]):
             axes[i].plot(sm['size_kb'], sm[col], 'o-', color=clr); axes[i].set_ylabel(lbl); axes[i].grid(True, which="both"); axes[i].set_xscale('log')
         axes[0].set_title("Standard Servlet Bottlenecks vs Payload Size")
-        axes[2].set_xlabel("Payload Size (KB)")
         plt.tight_layout(); plt.savefig("graph_motivation_combined.png"); plt.close()
 
     # 2. ODB Invariance Proof
@@ -206,7 +250,7 @@ def generate_all_reports(mot_csv, odb_csv, rnd_csv):
         plt.plot(sum_eff.index, sum_eff.values, 'o-', label=app)
     plt.xscale('log'); plt.title("CPU Efficiency (Cost per 1k requests)"); plt.ylabel("CPU % per 1000 RPS"); plt.legend(); plt.grid(True, which="both"); plt.savefig("graph_efficiency.png"); plt.close()
 
-    # 4. ODB Speedup
+    # 4. ODB Speedup & Multi-Node CPU
     max_rps = df.groupby(['servlet_name', 'size_kb'])['real_rps'].max().unstack(level=0)
     if 'Serv' in max_rps.columns and 'Serv-odb' in max_rps.columns:
         speedup = max_rps['Serv-odb'] / max_rps['Serv']
@@ -214,22 +258,20 @@ def generate_all_reports(mot_csv, odb_csv, rnd_csv):
         plt.title("ODB Speedup Factor (Max RPS Ratio)"); plt.ylabel("Speedup (x)"); plt.axhline(y=1.0, color='r', ls='--'); plt.savefig("graph_odb_speedup.png"); plt.close()
         max_rps[['Serv', 'Serv-odb']].assign(speedup=speedup).to_csv("results_comparison_max_rps.csv")
 
-    # 5. Dynamic Latency & Metrics at Fixed RPS
+    # 5. Dynamic Latency
     df['pair'] = df['servlet_name'] + "_" + df['image_name']
     stb = df[df['reason'] == 'None'].groupby('target_rps')['pair'].nunique()
     common = stb[stb >= (len(df['servlet_name'].unique()) * len(df['image_name'].unique()))].index.tolist()
     if common:
         bc = max(common)
         sub = df[df['target_rps'] == bc]
-
-        # Latency graph
         plt.figure(figsize=(10, 6))
         for app in sub['servlet_name'].unique():
             d = sub[sub['servlet_name'] == app].sort_values('size_kb')
             plt.plot(d['size_kb'], d['lat_ms'], 's-', label=f"{app} Avg Latency at {bc} RPS")
         plt.xscale('log'); plt.legend(); plt.grid(True, which="both"); plt.savefig("graph_latency_common.png"); plt.close()
 
-        # New: CPU and Bandwidth per image at fixed RPS
+        # CPU & BW per image at fixed RPS
         fig, ax1 = plt.subplots(figsize=(10, 6))
         ax2 = ax1.twinx()
         for app in sub['servlet_name'].unique():

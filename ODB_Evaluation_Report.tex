@@ -133,6 +133,26 @@ To handle high RPS ($>40,000$), Tomcat was tuned via \texttt{server.xml}:
 \end{itemize}
 
 \newpage
+\section{Evaluation Strategy}
+
+\subsection{Workload}
+A pool of 50 sampled images in addition to the 4 reference base images, totaling 54 test cases, ranging from \textbf{1.3KB to 1MB} is used to test the sensitivity of both implementations to data size.
+
+\subsection{RPS Ramping and Adaptive Precision Detection}
+The system uses an adaptive strategy starting at 500 RPS. The load is increased using coarse-grained steps (e.g., 5000 RPS). To find the exact limit intelligently, we implement an \textbf{Adaptive Precision Phase}. The load is increased until one of the following "Physical Saturation" points is reached:
+\begin{itemize}
+    \item Achieved RPS < 90\% of target RPS.
+    \item CPU utilization on M3 > 95\%.
+    \item Network throughput > 9.4 Gbps.
+    \item Average latency > 500 ms.
+\end{itemize}
+
+Once saturated, the script enters a \textbf{Precision Refinement} mode. It performs a finer-grained sweep between the \textit{last stable RPS} and the \textit{saturated RPS} to pinpoint the exact \texttt{RPSmax} with higher resolution. This ensures that our results are not merely artifacts of the coarse step size.
+
+\subsection{Fixed RPS Comparison}
+To ensure fair comparison of latency, the script dynamically identifies the highest RPS that all payload sizes and servlets can maintain stably, then generates comparison plots at this specific fixed point.
+
+\newpage
 \section{Evaluations and Scenarios}
 
 \subsection{Evaluation A: Motivation - Standard Servlet Bottlenecks}

@@ -70,4 +70,4 @@ Si après avoir activé le **Keep-Alive**, vous observez que le RPS augmente mai
 ---
 
 ## Conclusion Scientifique
-"L'ajout d'un 4ème nœud introduit une taxe TCP massive qui sature le système prématurément. L'optimisation par Keep-Alive supprime cette taxe, rendant le système plus efficace (plus de RPS pour moins de CPU). Pour observer une **surcharge** (saturation à 100%), il faut alors pousser le débit (RPS) et la concurrence jusqu'à ce que la puissance de calcul pure devienne à nouveau le goulot d'étranglement."
+"L'ajout d'un 4ème nœud introduit une taxe TCP massive qui sature le système prématurément. L'optimisation par Keep-Alive supprime cette taxe, rendant le système plus efficace (plus de RPS pour moins de CPU). Pour observer une **surcharge** (saturation à 100%), il faut alors pousser le débit (RPS) et la concurrence jusqu'à ce que la puissance de calcul pure devienne à nouveau le goulot d'étranglement. L'utilisation d'une **phase de précision** adaptative est essentielle pour détecter avec exactitude la transition entre un état stable et la saturation physique."
