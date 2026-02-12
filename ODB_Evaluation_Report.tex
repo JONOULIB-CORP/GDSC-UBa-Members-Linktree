@@ -1,0 +1,172 @@
+\documentclass[a4paper,12pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[french,english]{babel}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{geometry}
+\usepackage{booktabs}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{amsmath}
+
+\geometry{margin=2.5cm}
+
+\title{Scientific Evaluation Report: On-Demand Buffer (ODB) Performance in Multi-tier Applications}
+\author{Bande Teumou Manuela \\ Master's II - University of Yaoundé 1}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This report details the experimental evaluation of On-Demand Buffer (ODB), a zero-copy optimization for multi-tier applications. The evaluation aims to demonstrate the bypass capability of ODB and its impact on CPU utilization, throughput, and latency across various payload sizes. Conducted on the Grid'5000 bare-metal platform, the study compares a standard Java servlet baseline with an ODB-optimized version.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+\section{Presentation of ODB}
+\selectlanguage{french}
+L’objectif de notre deuxième contribution, On-Demand Buffer (ODB), est de proposer une solution zero-copie entre les noeuds d’une application multi-tier qui ne nécessite aucune modification des applications. ODB détecte de façon transparente le besoin d’exploitation d’une payload par les tiers intermédiaires et les rapatrie uniquement dans ce cas.
+
+Le mécanisme suit les étapes suivantes :
+\begin{enumerate}
+    \item \textbf{Émission} : Data Processing Server émet des données en invoquant \texttt{write()}. ODB intercepte cet appel de façon transparente et stocke les données dans un buffer dédié (\texttt{odb\_buff}). Pour localiser les données, ODB construit un descripteur (\texttt{odb\_desc}).
+    \item \textbf{Transfert Virtuel} : Au lieu d’envoyer le contenu réel, ODB envoie \texttt{odb\_desc} au serveur suivant (Web Server). On parle d’un envoi de donnée virtuelle.
+    \item \textbf{Réception} : Web Server effectue un appel \texttt{read()}. ODB intercepte l'appel, enregistre le mapping entre le buffer de réception de l'application et \texttt{odb\_desc}, puis protège la zone mémoire pour interdire tout accès.
+    \item \textbf{Récupération à la demande} : Si Web Server essaie d’accéder aux données, une faute de page est générée. Le traitant de faute d'ODB rapatrie alors les données réelles.
+    \item \textbf{Forwarding} : Si Web Server réémet les données sans y avoir accédé, ODB forwarde simplement \texttt{odb\_desc} tel qu'il l'avait reçu, réalisant ainsi un bypass complet du transfert de données sur le nœud intermédiaire.
+\end{enumerate}
+\selectlanguage{english}
+
+\section{Evaluation Aims and Objectives}
+The primary objective is to prove that ODB significantly reduces the per-request CPU cost in intermediate nodes by bypassing large payload transfers.
+\begin{itemize}
+    \item \textbf{Objective 1}: Demonstrate the "Efficiency Paradox" where standard servlets hit a CPU ceiling as payload size increases.
+    \item \textbf{Objective 2}: Prove ODB performance invariance: throughput should be independent of image size.
+    \item \textbf{Objective 3}: Quantify the "Speedup Factor" achieved by ODB for large payloads (e.g., 1MB).
+    \item \textbf{Objective 4}: Validate system stability through average and tail latency (P99) analysis.
+\end{itemize}
+
+\section{Experimental Procedure}
+
+\subsection{Platform Description}
+The evaluations are conducted on \textbf{Grid'5000} (Grenoble site), using physical bare-metal nodes (Dahu/Gros cluster).
+\begin{itemize}
+    \item \textbf{Network}: 10 Gbps Ethernet connectivity between nodes.
+    \item \textbf{CPU Throttling}: To observe saturation in a controlled manner, the intermediate node is restricted to exactly 4 active cores.
+    \item \textbf{Storage}: Shared NFS directory (\texttt{~/mesures}) across all nodes.
+\end{itemize}
+
+\subsection{Topology and Setup}
+A 4-tier architecture is employed to simulate a real-world production environment:
+\begin{enumerate}
+    \item \textbf{M1 (Client)}: Load generator running \texttt{wrk2}.
+    \item \textbf{M2 (Load Balancer)}: Nginx reverse-proxy with Keep-Alive optimized connections.
+    \item \textbf{M3 (Proxy Server)}: Tomcat server running the servlet under test (Proxy Mode).
+    \item \textbf{M4 (Backend Server)}: Tomcat server serving the original image files.
+\end{enumerate}
+
+\subsection{Metrics}
+The following metrics are collected for each test case:
+\begin{itemize}
+    \item \textbf{Throughput (RPS)}: Achieved requests per second.
+    \item \textbf{Bandwidth (Gbps)}: Network throughput measured on each node (M2, M3, M4).
+    \item \textbf{CPU Utilization (\%)}: Consumption on the restricted cores of the proxy node.
+    \item \textbf{Latency (ms)}: Average and 99th percentile (P99) response times.
+    \item \textbf{CPU Efficiency}: Normalized CPU cost per 1000 requests.
+\end{itemize}
+
+\section{Evaluation Strategy}
+
+\subsection{Workload}
+A pool of 50 images ranging from \textbf{1.3KB to 1MB} is used to test the sensitivity of both implementations to data size.
+
+\subsection{RPS Ramping and Saturation Detection}
+The system uses an adaptive strategy starting at 500 RPS. The load is increased until one of the following "Physical Saturation" points is reached:
+\begin{itemize}
+    \item Achieved RPS < 90\% of target RPS.
+    \item CPU utilization on M3 > 95\%.
+    \item Network throughput > 9.4 Gbps.
+    \item Average latency > 500 ms.
+\end{itemize}
+
+\subsection{Fixed RPS Comparison}
+To ensure fair comparison of latency, the script dynamically identifies the highest RPS that all payload sizes and servlets can maintain stably, then generates comparison plots at this specific fixed point.
+
+\section{Execution Infrastructure}
+
+\subsection{Automation Script}
+The campaign is automated using \texttt{run_benchmark_auto.py}, which handles:
+\begin{itemize}
+    \item Parallel multi-node monitoring via SSH/mpstat/sar.
+    \item Automatic resumability using CSV state files.
+    \item Intelligent stop logic.
+    \item Automated Matplotlib report generation.
+\end{itemize}
+
+\subsection{Manual Setup Commands}
+Pre-execution steps include:
+\begin{lstlisting}[language=bash, caption=Node Tuning]
+# Disable cores 4-63 on M3
+for i in $(seq 4 63); do
+  echo "0" | sudo-g5k tee /sys/devices/system/cpu/cpu$i/online
+done
+
+# Kernel tuning on M3
+sudo-g5k sysctl -w net.core.somaxconn=1024
+\end{lstlisting}
+
+\newpage
+\section{Results}
+
+\subsection{Expected Results}
+We expect the standard servlet to show a linear increase in CPU cost and a drastic drop in RPSmax as image size increases, eventually hitting the 10Gbps bandwidth bottleneck. In contrast, ODB results should remain relatively flat across all sizes, mirroring the behavior of the smallest 1KB files.
+
+\subsection{Raw Data}
+\textit{Data currently being generated by the automation script. CSV files available in ~/mesures/ after execution.}
+
+\subsection{Visual Analysis}
+
+\begin{figure}[h]
+    \centering
+    \textit{[Placeholder for graph\_motivation\_combined.png]}
+    \caption{Baseline Bottlenecks: RPS, Bandwidth, and CPU vs Payload Size.}
+\end{figure}
+
+\begin{figure}[h]
+    \centering
+    \textit{[Placeholder for graph\_efficiency.png]}
+    \caption{ODB Efficiency Proof: CPU Cost per 1000 Requests.}
+\end{figure}
+
+\begin{figure}[h]
+    \centering
+    \textit{[Placeholder for graph\_odb\_invariance.png]}
+    \caption{ODB Invariance: Max RPS across all payload sizes.}
+\end{figure}
+
+\begin{figure}[h]
+    \centering
+    \textit{[Placeholder for graph\_latency_common.png]}
+    \caption{Comparative Latency at highest common stable RPS.}
+\end{figure}
+
+\newpage
+\section{Discussion and Interpretation}
+
+\subsection{Efficiency Analysis}
+% To be completed after results
+
+\subsection{Payload Size Independence}
+% To be completed after results
+
+\subsection{Impact of 4-Tier Setup}
+% To be completed after results
+
+\section{Conclusion}
+% To be completed after results
+
+\end{document}
