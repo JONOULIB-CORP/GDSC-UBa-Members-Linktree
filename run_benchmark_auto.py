@@ -42,8 +42,9 @@ APPLICATIONS = {
     "Serv-odb": {"endpoint": "/serv1/Serv"}
 }
 
-# Pool complet d'images (50 images)
+# Pool complet d'images
 FULL_PAYLOAD_POOL = {
+    "image_1KB.jpg": 1.0, "image_10KB.jpg": 10.0, "image_100KB.jpg": 100.0, "image_1000KB.jpg": 1024.0,
     "img1.jpg":1.3, "img2.jpg":89.5, "img3.jpg":117.8, "img4.jpg":117.8, "img5.jpg":257.9,
     "img6.jpg":224, "img7.jpg":278.4, "img8.jpg":189.5, "img9.jpg":546.2, "img10.jpg":466.8,
     "img11.jpg":419.4, "img12.jpg":921.7, "img13.jpg":16.9, "img14.jpg":24.7, "img15.jpg":38,
@@ -56,7 +57,7 @@ FULL_PAYLOAD_POOL = {
     "img46.jpg":50.8, "img47.jpg":570.9, "img48.jpg":999.7, "img49.jpg":38.9, "img50.jpg":970.7,
 }
 # On garde quelques points clés pour les modes motivation/odb_test de base
-CORE_PAYLOADS = {k: FULL_PAYLOAD_POOL[k] for k in ["img1.jpg", "img13.jpg", "img2.jpg", "img48.jpg"] if k in FULL_PAYLOAD_POOL}
+CORE_PAYLOADS = {k: FULL_PAYLOAD_POOL[k] for k in ["image_1KB.jpg", "image_10KB.jpg", "image_100KB.jpg", "image_1000KB.jpg"] if k in FULL_PAYLOAD_POOL}
 
 # ==============================================================================
 # 2. LOGIQUE DE MONITORING

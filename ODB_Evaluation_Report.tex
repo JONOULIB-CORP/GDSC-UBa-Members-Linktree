@@ -164,12 +164,12 @@ To handle high RPS ($>40,000$), Tomcat was tuned via \texttt{server.xml}:
 
 \textbf{Scientific Expectation}: If ODB truly bypasses the data via virtual descriptors, the cost of processing a 1MB file should be identical to the cost of a 1KB file ($\approx$ size of the descriptor).
 
-\subsection{Evaluation C: Large-Scale Invariance (50 images)}
+\subsection{Evaluation C: Large-Scale Invariance (50 sampled images)}
 \textbf{Objective}: Validate ODB performance stability across a massive set of payloads (1.3KB to 999.7KB) to ensure there are no "hidden" costs or corner cases in the descriptor handling.
 
-\textbf{Setup}: We utilize the full pool of 50 images provided in the automation script.
+\textbf{Setup}: We utilize a pool of 50 sampled images in addition to the 4 reference base images, totaling 54 test cases.
 
-\textbf{Rationale}: Scientific results on a small number of samples can be subject to cache artifacts. By using 50 distinct sizes, we provide a statistically significant "Invariance Proof" where ODB results should form a horizontal line, overlapping the baseline standard performance of a 1KB file.
+\textbf{Rationale}: Scientific results on a small number of samples can be subject to cache artifacts. By using 50+ distinct sizes, we provide a statistically significant "Invariance Proof" where ODB results should form a horizontal line, overlapping the baseline standard performance of a 1KB file.
 
 \subsection{Evaluation D: Latency Stability at Best Common RPS}
 \textbf{Objective}: Compare the tail latency (P99) of ODB vs. Standard at a fixed load level.
