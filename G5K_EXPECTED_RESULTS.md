@@ -16,11 +16,12 @@ After running `python3 run_benchmark_auto.py --mode all`, you should find the fo
 - `size_kb`: Payload size.
 - `target_rps`: The RPS requested from wrk.
 - `real_rps`: The RPS actually achieved by the system.
-- `gbps`: Measured network throughput on the intermediate node.
+- `gbps`: Measured network throughput from Client perspective.
 - `lat_ms`: Average latency.
 - `lat_p99_ms`: Tail latency (99th percentile).
-- `cpu`: CPU utilization percentage on M3 (Average across the 4 active cores).
-- `reason`: The scientific diagnosis of saturation (None, SAT_CPU, SAT_BW, SAT_LATENCY, or SAT_SOFT).
+- `cpu_lb`, `cpu_inter`, `cpu_back`: CPU usage on each node (M2, M3, M4).
+- `bw_lb`, `bw_inter`, `bw_back`: Network throughput (rx+tx) measured on each node in Gbps.
+- `reason`: The scientific diagnosis of saturation.
 
 ## 2. Scientific Graphs (PNG)
 
@@ -30,7 +31,8 @@ Toutes les courbes utilisent une échelle logarithmique pour les tailles d'image
 - **`graph_motivation_combined.png`** : Graphe à 3 panneaux (RPSmax, Débit Gbps, et CPU à saturation). Il prouve visuellement le passage d'un goulot CPU (petits fichiers) à un goulot Bande passante (gros fichiers).
 
 ### Preuves de performance ODB
-- **`graph_efficiency.png`** : **LA preuve scientifique.** Affiche le "Coût CPU pour 1000 requêtes". Pour ODB, cette courbe doit rester **plate et basse**, prouvant l'indépendance vis-à-vis de la taille. Pour `Serv`, le coût explose.
-- **`graph_odb_invariance.png`** : Montre que les performances d'ODB sur tous les fichiers (même 1MB) "collent" à la performance du servlet standard sur un tout petit fichier (1KB).
-- **`graph_odb_speedup.png`** : Histogramme du gain brut (ex: ODB est 8x plus rapide sur 1MB).
-- **`graph_latency_common.png`** : Comparaison de la latence au meilleur RPS commun trouvé dynamiquement par le script.
+- **`graph_efficiency.png`** : **LA preuve scientifique.** Affiche le "Coût CPU sur M3 pour 1000 requêtes". Pour ODB, cette courbe est plate.
+- **`graph_odb_invariance.png`** : Montre que ODB (toutes tailles) est équivalent au standard (1KB).
+- **`graph_odb_speedup.png`** : Histogramme du gain brut.
+- **`graph_latency_common.png`** : Comparaison de la latence au meilleur RPS commun trouvé dynamiquement.
+- **`graph_multi_node_cpu.png`** : Compare la charge CPU sur le LB (M2), le Proxy (M3) et le Backend (M4) lors de la saturation ODB.

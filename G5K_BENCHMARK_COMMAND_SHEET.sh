@@ -14,8 +14,8 @@
 # ------------------------------------------------------------------------------
 # Role: Serve local files to M3
 
-# Install Java 17 (Required for Tomcat 11)
-sudo-g5k apt update && sudo-g5k apt install -y openjdk-17-jre
+# Install Java 17 and Monitoring tools
+sudo-g5k apt update && sudo-g5k apt install -y openjdk-17-jre sysstat
 
 # Start Tomcat (assuming serv.war is already in webapps/)
 cd ~/mesures/apache-tomcat-11.0.1
@@ -29,8 +29,8 @@ curl -I "http://localhost:8080/serv/Serv?image=small.jpg"
 # ------------------------------------------------------------------------------
 # Role: Proxy requests to M4. THIS IS THE BOTTLENECK NODE.
 
-# Install Java 17
-sudo-g5k apt update && sudo-g5k apt install -y openjdk-17-jre
+# Install Java 17 and Monitoring tools
+sudo-g5k apt update && sudo-g5k apt install -y openjdk-17-jre sysstat
 
 # Start Tomcat
 cd ~/mesures/apache-tomcat-11.0.1
@@ -57,7 +57,8 @@ sudo-g5k sysctl -w net.ipv4.tcp_max_syn_backlog=1024
 cd ~/mesures/apache-tomcat-11.0.1 && ./bin/shutdown.sh 2>/dev/null || true
 sudo-g5k fuser -k 8080/tcp 2>/dev/null || true
 
-sudo-g5k apt update && sudo-g5k apt install -y nginx
+# Install Nginx and Monitoring tools
+sudo-g5k apt update && sudo-g5k apt install -y nginx sysstat
 
 # Create Proxy Config with Keep-Alive to M3
 # IMPORTANT: Replace <IP_M3> with the real IP of node M3
@@ -96,7 +97,17 @@ sudo-g5k nginx -t && sudo-g5k systemctl restart nginx
 curl -I "http://localhost:8080/serv/Serv?image=small.jpg"
 
 # ------------------------------------------------------------------------------
-# 4. EXECUTION ON M1 (CLIENT - LOAD GENERATOR)
+# 4. SETUP NODE M1 (CLIENT - GENERATOR & ANALYZER)
+# ------------------------------------------------------------------------------
+
+# Install Python dependencies for the automation script
+pip install pandas matplotlib numpy
+
+# Ensure SSH key is authorized on M2, M3, M4 for non-interactive monitoring
+# cat ~/.ssh/id_rsa.pub | ssh <USER>@<NODE> 'cat >> ~/.ssh/authorized_keys'
+
+# ------------------------------------------------------------------------------
+# 5. EXECUTION ON M1
 # ------------------------------------------------------------------------------
 
 # Target: M2 (LB)
