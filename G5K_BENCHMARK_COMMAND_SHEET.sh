@@ -148,16 +148,87 @@ ss -lnt
 # ------------------------------------------------------------------------------
 
 # A. Fix 404: Ensure web.xml is in the correct location
+# For serv (Standard):
+mkdir -p ~/mesures/apache-tomcat-11.0.1/webapps/serv/WEB-INF
+if [ -f ~/mesures/apache-tomcat-11.0.1/webapps/serv/web.xml ]; then
+  mv ~/mesures/apache-tomcat-11.0.1/webapps/serv/web.xml ~/mesures/apache-tomcat-11.0.1/webapps/serv/WEB-INF/
+fi
+
 # For serv1 (ODB):
 mkdir -p ~/mesures/apache-tomcat-11.0.1/webapps/serv1/WEB-INF
-mv ~/mesures/apache-tomcat-11.0.1/webapps/serv1/web.xml ~/mesures/apache-tomcat-11.0.1/webapps/serv1/WEB-INF/
+if [ -f ~/mesures/apache-tomcat-11.0.1/webapps/serv1/web.xml ]; then
+  mv ~/mesures/apache-tomcat-11.0.1/webapps/serv1/web.xml ~/mesures/apache-tomcat-11.0.1/webapps/serv1/WEB-INF/
+fi
 
-# B. Fix NoSuchMethodError: Clean and Recompile Servlets
-# Navigate to the classes directory
+# B. Fix NoSuchMethodError: Clean and Recompile Servlets (Lambda-Free version)
+# IMPORTANT: The ODB tool is incompatible with lambdas capturing HttpServletResponse.
+# Use this "Safe" version of Serv.java:
+
+cat <<EOF > ~/mesures/apache-tomcat-11.0.1/webapps/serv1/WEB-INF/classes/app/Serv.java
+package app;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.util.Optional;
+
+import jakarta.servlet.ServletException;
+import jakarta.servlet.annotation.WebServlet;
+import jakarta.servlet.http.HttpServlet;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+
+@WebServlet("/Serv")
+public class Serv extends HttpServlet {
+    private final HttpClient client = HttpClient.newHttpClient();
+
+    @Override
+    protected void doGet(HttpServletRequest request, HttpServletResponse response) throws ServletException, IOException {
+        String machine = request.getParameter("machine");
+        String image = request.getParameter("image");
+
+        if (machine == null) {
+            InputStream file = request.getServletContext().getResourceAsStream("/" + image);
+            if (file == null) { response.sendError(404); return; }
+            byte[] bytes = file.readAllBytes();
+            response.setContentType(getServletContext().getMimeType(image));
+            response.setContentLength(bytes.length);
+            response.getOutputStream().write(bytes);
+            return;
+        }
+
+        String url = "http://" + machine + ":8080/serv/Serv?image=" + image;
+        HttpRequest req = HttpRequest.newBuilder().uri(URI.create(url)).GET().build();
+
+        try {
+            HttpResponse<byte[]> resp = client.send(req, HttpResponse.BodyHandlers.ofByteArray());
+
+            // --- LAMBDA-FREE HEADER PROCESSING (Avoids ODB NoSuchMethodError) ---
+            Optional<String> ct = resp.headers().firstValue("Content-Type");
+            if (ct.isPresent()) response.setContentType(ct.get());
+
+            Optional<String> cl = resp.headers().firstValue("Content-Length");
+            if (cl.isPresent()) response.setHeader("Content-Length", cl.get());
+
+            for (String cc : resp.headers().allValues("Cache-Control")) {
+                response.addHeader("Cache-Control", cc);
+            }
+
+            response.getOutputStream().write(resp.body());
+
+        } catch (Exception e) {
+            e.printStackTrace();
+            response.sendError(500);
+        }
+    }
+}
+EOF
+
+# Recompile
 cd ~/mesures/apache-tomcat-11.0.1/webapps/serv1/WEB-INF/classes
-
-# Recompile Serv.java (Ensure you have the .java source file available)
-# The classpath (-cp) must include Tomcat's servlet-api (usually in ../../../lib/)
 javac -cp "../../../lib/*" app/Serv.java
 
 # Restart Tomcat to apply changes
