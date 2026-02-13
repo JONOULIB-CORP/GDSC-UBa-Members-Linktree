@@ -14,8 +14,8 @@
 # ------------------------------------------------------------------------------
 # Role: Serve local files to M3
 
-# Install Java 17 and Monitoring tools
-sudo-g5k apt update && sudo-g5k apt install -y openjdk-17-jre sysstat
+# Install Java 21 and Monitoring tools
+sudo-g5k apt update && sudo-g5k apt install -y openjdk-21-jre sysstat
 
 # Start Tomcat (assuming serv.war is already in webapps/)
 cd ~/mesures/apache-tomcat-11.0.1
@@ -29,8 +29,8 @@ curl -I "http://localhost:8080/serv/Serv?image=small.jpg"
 # ------------------------------------------------------------------------------
 # Role: Proxy requests to M4. THIS IS THE BOTTLENECK NODE.
 
-# Install Java 17 and Monitoring tools
-sudo-g5k apt update && sudo-g5k apt install -y openjdk-17-jre sysstat
+# Install Java 21 and Monitoring tools
+sudo-g5k apt update && sudo-g5k apt install -y openjdk-21-jre sysstat
 
 # Start Tomcat
 cd ~/mesures/apache-tomcat-11.0.1
@@ -164,7 +164,7 @@ fi
 # IMPORTANT 1: Current ODB Parser (Parser6.java) has a bug with InvokeDynamic linkage.
 # It fails to update lambda signatures in BootstrapMethods, causing NoSuchMethodError.
 # FIX: Use this "Lambda-Free" version of Serv.java until the parser is fixed.
-# IMPORTANT 2: Use --release 17 (or 21) depending on your target JVM version.
+# IMPORTANT 2: Use --release 21 to match the environment.
 
 mkdir -p ~/mesures/apache-tomcat-11.0.1/webapps/serv1/WEB-INF/classes/app
 cat <<EOF > ~/mesures/apache-tomcat-11.0.1/webapps/serv1/WEB-INF/classes/app/Serv.java
@@ -234,7 +234,7 @@ EOF
 
 # Recompile
 cd ~/mesures/apache-tomcat-11.0.1/webapps/serv1/WEB-INF/classes
-javac --release 17 -cp "../../../lib/*" app/Serv.java
+javac --release 21 -cp "../../../lib/*" app/Serv.java
 
 # Restart Tomcat to apply changes
 cd ~/mesures/apache-tomcat-11.0.1
