@@ -160,8 +160,9 @@ if [ -f ~/mesures/apache-tomcat-11.0.1/webapps/serv1/web.xml ]; then
   mv ~/mesures/apache-tomcat-11.0.1/webapps/serv1/web.xml ~/mesures/apache-tomcat-11.0.1/webapps/serv1/WEB-INF/
 fi
 
-# B. Fix NoSuchMethodError: Clean and Recompile Servlets (Lambda-Free version)
-# IMPORTANT: The ODB tool is incompatible with lambdas capturing HttpServletResponse.
+# B. Fix NoSuchMethodError & Version Mismatch: Clean and Recompile Servlets
+# IMPORTANT 1: The ODB tool is incompatible with lambdas capturing HttpServletResponse.
+# IMPORTANT 2: Use --release 17 to ensure compatibility with Tomcat's JVM.
 # Use this "Safe" version of Serv.java:
 
 mkdir -p ~/mesures/apache-tomcat-11.0.1/webapps/serv1/WEB-INF/classes/app
@@ -230,7 +231,7 @@ EOF
 
 # Recompile
 cd ~/mesures/apache-tomcat-11.0.1/webapps/serv1/WEB-INF/classes
-javac -cp "../../../lib/*" app/Serv.java
+javac --release 17 -cp "../../../lib/*" app/Serv.java
 
 # Restart Tomcat to apply changes
 cd ~/mesures/apache-tomcat-11.0.1
