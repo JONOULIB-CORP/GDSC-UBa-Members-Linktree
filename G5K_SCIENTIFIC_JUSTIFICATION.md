@@ -95,3 +95,8 @@ L'agent d'instrumentation ODB (`Parser6.java`) présente une limitation techniqu
 - **Symptôme** : `NoSuchMethodError` lors de l'appel de lambdas capturant des objets Servlet.
 - **Cause Technique** : L'agent transforme les signatures des méthodes générées pour les lambdas (ex: `lambda$doGet$0`), mais ne met pas à jour les arguments de la **Bootstrap Method** dans le pool de constantes. L'appel dynamique tente alors d'exécuter une méthode avec l'ancienne signature (ex: `jakarta.servlet...`) qui n'existe plus dans la classe transformée.
 - **Solution** : Le code des servlets doit être écrit en style **impératif classique** (boucles `for`, blocs `if`) pour éviter la génération de `INVOKEDYNAMIC` par le compilateur, ou le parseur doit être mis à jour pour transformer les `bsmArgs`.
+
+### Le piège de l'API HttpClient (Matérialisation)
+Pour bénéficier d'ODB dans un rôle de Proxy, il est impératif d'utiliser des API de streaming.
+- **À éviter** : `BodyHandlers.ofByteArray()` télécharge l'intégralité des données en RAM sur le Proxy avant même que l'agent ODB ne puisse intervenir. Le bénéfice est alors nul (la copie a déjà eu lieu).
+- **À privilégier** : `BodyHandlers.ofInputStream()` permet à l'agent d'intercepter le flux et de manipuler des descripteurs virtuels au lieu des octets réels.

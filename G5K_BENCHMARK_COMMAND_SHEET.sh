@@ -209,7 +209,8 @@ public class Serv extends HttpServlet {
         HttpRequest req = HttpRequest.newBuilder().uri(URI.create(url)).GET().build();
 
         try {
-            HttpResponse<byte[]> resp = client.send(req, HttpResponse.BodyHandlers.ofByteArray());
+            // Utilisation de ofInputStream pour permettre à ODB de capturer le flux sans matérialiser les octets
+            HttpResponse<InputStream> resp = client.send(req, HttpResponse.BodyHandlers.ofInputStream());
 
             // --- LAMBDA-FREE HEADER PROCESSING (Avoids ODB NoSuchMethodError) ---
             Optional<String> ct = resp.headers().firstValue("Content-Type");
@@ -222,7 +223,10 @@ public class Serv extends HttpServlet {
                 response.addHeader("Cache-Control", cc);
             }
 
-            response.getOutputStream().write(resp.body());
+            // Lecture via MyInputStream.readAllBytes() qui renverra un Pair (descripteur)
+            InputStream is = resp.body();
+            byte[] bytes = is.readAllBytes();
+            response.getOutputStream().write(bytes);
 
         } catch (Exception e) {
             e.printStackTrace();
