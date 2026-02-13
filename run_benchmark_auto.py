@@ -131,7 +131,8 @@ def parse_wrk_output(output):
 def execute_test(app_id, img_name, rate, topo):
     ips = [topo["lb"]["ip"], topo["intermediate"]["ip"], topo["backend"]["ip"]]
     clean_remote_logs(ips)
-    url = f"http://{topo['lb']['ip']}:8080{APPLICATIONS[app_id]['endpoint']}?machine={topo['backend']['hostname']}&image={img_name}"
+    # On ajoute explicitement service=serv pour garantir que le Proxy appelle bien le Backend standard
+    url = f"http://{topo['lb']['ip']}:8080{APPLICATIONS[app_id]['endpoint']}?machine={topo['backend']['hostname']}&image={img_name}&service=serv"
     wrk_cmd = f"~/mesures/wrk2/wrk -t{WRK_THREADS} -c{WRK_CONNECTIONS} -d{MEASURE_SEC}s -R{rate} -H 'Connection: keep-alive' --latency --timeout {TIMEOUT} \"{url}\""
     log(f"EXEC: {app_id} | {img_name} | {rate} RPS", "INFO")
     subprocess.run([f"~/mesures/wrk2/wrk -t{WRK_THREADS} -c{WRK_CONNECTIONS} -d{WARMUP_SEC}s -R{rate} \"{url}\""], shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
