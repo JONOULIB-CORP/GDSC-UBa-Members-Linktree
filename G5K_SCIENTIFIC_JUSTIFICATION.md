@@ -31,13 +31,15 @@ Dans votre test 1MB, vous obtenez **293 RPS** (286 MB/s) au lieu des 500 demand�
 
 ---
 
-## 3. Preuve Mathématique : Loi de Little
+## 3. Preuve Mathématique : Loi de Little et Congestion Collapse
 
 Même avec un noyau débloqué, si la latence (**W**) reste élevée à cause du réseau ou du backend, le débit (**$\lambda$**) est limité par :
 $$\lambda = L / W$$
 *   Si **W** = 15s (latence observée) et **L** = 200 (vos connexions), alors **$\lambda$** = 13.3 requêtes/sec.
-*   Si vous obtenez **293 RPS**, c'est que votre système gère en fait $\sim 4400$ requêtes en parallèle (en comptant les files d'attente système).
 *   Le système est à sa limite de **Débit de Données**, pas de **Puissance CPU**.
+
+### Le Phénomène de Congestion Collapse
+Si vous poussez le débit cible (target RPS) bien au-delà de la capacité maximale, la latence explose (ex: >10s). Dans cet état, le CPU de M3 passe son temps à gérer des timeouts et des retransmissions TCP plutôt qu'à traiter des requêtes utiles. Le RPS réel chute alors que le CPU reste très occupé. C'est le signe qu'il faut réduire le `target RPS` pour trouver le point de bascule exact.
 
 ---
 
@@ -69,8 +71,24 @@ Si après avoir activé le **Keep-Alive**, vous observez que le RPS augmente mai
 
 ---
 
+## 6. Le Point d'Inflexion de la Payload (Pourquoi 1KB est un piège)
+
+Lors des tests avec des petites payloads (1KB, 10KB), la différence entre `serv` (Standard) et `serv1` (ODB) peut paraître négligeable. C'est un comportement attendu expliqué par la répartition des coûts CPU :
+
+### Coût Fixe vs Coût Variable
+1.  **Coût Fixe (Network Stack) :** Le travail pour gérer l'interruption réseau, le paquet TCP et le parsing HTTP. Ce coût est présent pour chaque requête, quelle que soit la taille de l'image. Il se manifeste par un fort `%soft` et `%sys` dans `mpstat`.
+2.  **Coût Variable (Data Copy) :** Le temps CPU passé à déplacer les données en mémoire (`memcpy`). Ce coût est strictement proportionnel à la taille de la payload.
+
+### Analyse du bénéfice ODB
+*   **À 1KB :** Le coût fixe représente ~99% du travail. Éliminer le coût variable (1%) ne change pas le RPS de façon visible.
+*   **À 1MB :** Le coût variable (copie de 1Mo) devient massif et dépasse le coût fixe.
+    *   **Standard (`serv`) :** S'effondre car le CPU passe son temps à copier des mégaoctets.
+    *   **ODB (`serv1`) :** Reste performant car il continue de ne traiter que des descripteurs de ~1KB.
+
+**Conclusion :** La preuve de l'efficacité d'ODB n'est pas l'augmentation du RPS max à 1KB, mais l'**invariance du RPS** quand la taille de l'image augmente vers 1MB.
+
 ## Conclusion Scientifique
-"L'ajout d'un 4ème nœud introduit une taxe TCP massive qui sature le système prématurément. L'optimisation par Keep-Alive supprime cette taxe, rendant le système plus efficace (plus de RPS pour moins de CPU). Pour observer une **surcharge** (saturation à 100%), il faut alors pousser le débit (RPS) et la concurrence jusqu'à ce que la puissance de calcul pure devienne à nouveau le goulot d'étranglement. L'utilisation d'une **phase de précision** adaptative est essentielle pour détecter avec exactitude la transition entre un état stable et la saturation physique."
+"L'ajout d'un 4ème nœud introduit une taxe TCP massive qui sature le système prématurément. L'optimisation par Keep-Alive supprime cette taxe, rendant le système plus efficace (plus de RPS pour moins de CPU). Pour observer une **surcharge** (saturation à 100%), il faut alors pousser le débit (RPS) et la concurrence jusqu'à ce que la puissance de calcul pure devienne à nouveau le goulot d'étranglement. L'utilisation d'une **phase de précision** adaptative est essentielle pour détecter avec exactitude la transition entre un état stable et la saturation physique. Enfin, la supériorité d'ODB se démontre par sa capacité à maintenir un RPS élevé sur de grandes payloads (1MB), là où une architecture standard subit une dégradation linéaire de ses performances."
 
 ### Note sur l'Agent ODB et les Lambdas Java
 L'agent d'instrumentation ODB (`Parser6.java`) présente une limitation technique majeure : il ne traite pas les instructions `INVOKEDYNAMIC`.
