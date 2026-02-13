@@ -192,11 +192,6 @@ public class Serv extends HttpServlet {
     protected void doGet(HttpServletRequest request, HttpServletResponse response) throws ServletException, IOException {
         String machine = request.getParameter("machine");
         String image = request.getParameter("image");
-        String service = request.getParameter("service");
-
-        // Paramètre optionnel 'service' pour cibler un contexte différent sur le backend
-        // (Par défaut 'serv' pour l'architecture Grid'5000 4-tier)
-        if (service == null) service = "serv";
 
         if (machine == null) {
             InputStream file = request.getServletContext().getResourceAsStream("/" + image);
@@ -208,8 +203,9 @@ public class Serv extends HttpServlet {
             return;
         }
 
-        // Dynamisation du chemin du contexte
-        String url = "http://" + machine + ":8080/" + service + "/Serv?image=" + image;
+        // Dynamisation du chemin du contexte (utilise le contexte actuel de l'appli)
+        String contextPath = request.getContextPath();
+        String url = "http://" + machine + ":8080" + contextPath + "/Serv?image=" + image;
         HttpRequest req = HttpRequest.newBuilder().uri(URI.create(url)).GET().build();
 
         try {
