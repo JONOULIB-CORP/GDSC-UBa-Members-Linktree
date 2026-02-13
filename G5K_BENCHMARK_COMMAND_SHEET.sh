@@ -164,6 +164,7 @@ fi
 # IMPORTANT: The ODB tool is incompatible with lambdas capturing HttpServletResponse.
 # Use this "Safe" version of Serv.java:
 
+mkdir -p ~/mesures/apache-tomcat-11.0.1/webapps/serv1/WEB-INF/classes/app
 cat <<EOF > ~/mesures/apache-tomcat-11.0.1/webapps/serv1/WEB-INF/classes/app/Serv.java
 package app;
 
