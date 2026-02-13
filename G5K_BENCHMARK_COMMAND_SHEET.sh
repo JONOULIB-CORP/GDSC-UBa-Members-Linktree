@@ -161,9 +161,10 @@ if [ -f ~/mesures/apache-tomcat-11.0.1/webapps/serv1/web.xml ]; then
 fi
 
 # B. Fix NoSuchMethodError & Version Mismatch: Clean and Recompile Servlets
-# IMPORTANT 1: The ODB tool is incompatible with lambdas capturing HttpServletResponse.
-# IMPORTANT 2: Use --release 17 to ensure compatibility with Tomcat's JVM.
-# Use this "Safe" version of Serv.java:
+# IMPORTANT 1: Current ODB Parser (Parser6.java) has a bug with InvokeDynamic linkage.
+# It fails to update lambda signatures in BootstrapMethods, causing NoSuchMethodError.
+# FIX: Use this "Lambda-Free" version of Serv.java until the parser is fixed.
+# IMPORTANT 2: Use --release 17 (or 21) depending on your target JVM version.
 
 mkdir -p ~/mesures/apache-tomcat-11.0.1/webapps/serv1/WEB-INF/classes/app
 cat <<EOF > ~/mesures/apache-tomcat-11.0.1/webapps/serv1/WEB-INF/classes/app/Serv.java
