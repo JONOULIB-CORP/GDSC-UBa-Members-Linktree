@@ -1,6 +1,13 @@
-*history*
-*vscode*
-*idea*
-/bin*
-*lib*
-.DS_Store
+# Fichiers de résultats générés
+*.csv
+plots/
+latency_analysis/
+
+# Fichiers de log
+*.log
+
+# Cache Python
+__pycache__/
+
+# Fichier de configuration utilisateur (ne jamais commiter)
+user_config.py

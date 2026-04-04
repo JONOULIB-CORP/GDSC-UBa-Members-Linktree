@@ -70,3 +70,12 @@ To submit your task, create a pull request to this repository. You can find more
 ## Cheers 🍻 to our contributors
 
 ![Contributors](./CONTRIBUTORS.svg)
+
+---
+
+## 🛠️ Grid'5000 Optimization Guide
+For the benchmarking session, please refer to:
+*   [G5K_AUTO_BENCHMARK_TUTORIAL.md](./G5K_AUTO_BENCHMARK_TUTORIAL.md) : **Tutorial for the Automatic Script (Recommended)**.
+*   [G5K_BENCHMARK_COMMAND_SHEET.sh](./G5K_BENCHMARK_COMMAND_SHEET.sh) : Liste de toutes les commandes manuelles à copier-coller.
+*   [G5K_BARE_METAL_TUNING.md](./G5K_BARE_METAL_TUNING.md) : Guide détaillé par nœud et par étape.
+*   [G5K_SCIENTIFIC_JUSTIFICATION.md](./G5K_SCIENTIFIC_JUSTIFICATION.md) : Explications scientifiques des goulots d'étranglement rencontrés.
